@@ -3,28 +3,77 @@ import json
 from typing import AsyncIterator
 import httpx
 
-ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")  # e.g. https://....openai.azure.com/openai/v1
-API_KEY  = os.getenv("AZURE_API_KEY", "")
-API_VER  = "2025-04-01-preview"
+# Overridable by tests; empty string means "read from env at call time".
+_INFERENCE_BASE: str = ""
+API_KEY: str = ""
+API_VER: str = "2024-08-01-preview"
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 
+def _base() -> str:
+    if _INFERENCE_BASE:
+        return _INFERENCE_BASE
+    raw = os.getenv("AZURE_INFERENCE_ENDPOINT") or os.getenv("AZURE_OPENAI_ENDPOINT", "")
+    raw = raw.rstrip("/")
+    if raw.endswith("/openai/v1"):
+        raw = raw[: -len("/openai/v1")]
+    return raw
+
+
+def _key() -> str:
+    return API_KEY or os.getenv("AZURE_API_KEY", "")
+
+
 def _headers() -> dict:
     return {
-        "api-key": API_KEY,
+        "api-key": _key(),
         "Content-Type": "application/json",
     }
 
 
+def _deployment_url(deployment: str, path: str) -> str:
+    return f"{_base()}/openai/deployments/{deployment}/{path}?api-version={API_VER}"
+
+
 async def health_check() -> bool:
-    url = f"{ENDPOINT.rstrip('/')}/models?api-version={API_VER}"
+    # A lightweight probe: HEAD against the chat endpoint of the primary model.
+    url = _deployment_url("gpt-5.3-chat", "chat/completions")
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(url, headers=_headers())
-            return r.status_code == 200
+            # POST with minimal payload; any non-5xx/network response means reachable.
+            r = await client.post(
+                url,
+                headers=_headers(),
+                json={"messages": [{"role": "user", "content": "hi"}], "max_completion_tokens": 1},
+            )
+            return r.status_code < 500
     except Exception:
         return False
+
+
+# Models that use max_completion_tokens and do not support temperature overrides.
+_GPT_MODELS = {"gpt-5.3-chat", "gpt-4o", "gpt-4o-mini", "o1", "o3", "o4"}
+
+
+def _is_gpt(model: str) -> bool:
+    return any(model.startswith(prefix) for prefix in _GPT_MODELS)
+
+
+def _chat_payload(model: str, messages: list[dict], max_tokens: int, temperature: float) -> dict:
+    payload: dict = {
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if _is_gpt(model):
+        # GPT-5 series: uses max_completion_tokens, temperature must be omitted
+        # (only default value of 1 is accepted).
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+        payload["temperature"] = temperature
+    return payload
 
 
 async def stream_chat(
@@ -39,15 +88,8 @@ async def stream_chat(
       {"type": "usage",   "prompt_tokens": int, "completion_tokens": int}
       {"type": "error",   "message": str}
     """
-    url = f"{ENDPOINT.rstrip('/')}/chat/completions?api-version={API_VER}"
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-    }
+    url = _deployment_url(model, "chat/completions")
+    payload = _chat_payload(model, messages, max_tokens, temperature)
 
     async with httpx.AsyncClient(timeout=120) as client:
         try:
@@ -85,8 +127,8 @@ async def stream_chat(
 
 
 async def get_embedding(text: str) -> list[float]:
-    url = f"{ENDPOINT.rstrip('/')}/embeddings?api-version={API_VER}"
-    payload = {"model": EMBEDDING_MODEL, "input": text}
+    url = _deployment_url(EMBEDDING_MODEL, "embeddings")
+    payload = {"input": text}
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, headers=_headers(), json=payload)
         r.raise_for_status()

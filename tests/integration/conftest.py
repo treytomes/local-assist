@@ -84,9 +84,11 @@ def live_server(tmp_path_factory):
 
     env = os.environ.copy()
     env["LOCAL_ASSIST_DB_PATH"] = str(db_path)
-    # Disable Azure so the server always uses Ollama during integration tests.
+    # Disable Azure so the server always falls back to Ollama.
+    # Clear both endpoint vars so azure._base() returns the unreachable address.
     env["AZURE_API_KEY"] = "integration-test-disabled"
-    env["AZURE_OPENAI_ENDPOINT"] = "http://127.0.0.1:0"  # unreachable
+    env["AZURE_OPENAI_ENDPOINT"] = "http://127.0.0.1:0"
+    env["AZURE_INFERENCE_ENDPOINT"] = "http://127.0.0.1:0"
 
     proc = subprocess.Popen(
         [".venv/bin/python", "-m", "uvicorn", "src.backend.main:app",
@@ -119,9 +121,12 @@ def live_server(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def require_azure():
-    """Skip if Azure credentials are not configured."""
-    if not os.getenv("AZURE_API_KEY") or not os.getenv("AZURE_OPENAI_ENDPOINT"):
+    """Skip if Azure credentials are not configured or endpoint is a test stub."""
+    key = os.getenv("AZURE_API_KEY", "")
+    if not key or key == "integration-test-disabled":
         pytest.skip("Azure credentials not set — skipping Azure contract tests")
-    endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-    if "127.0.0.1" in endpoint or "localhost" in endpoint:
-        pytest.skip("AZURE_OPENAI_ENDPOINT points to localhost — looks like a test override")
+    # Check both endpoint vars that azure._base() reads
+    for var in ("AZURE_INFERENCE_ENDPOINT", "AZURE_OPENAI_ENDPOINT"):
+        endpoint = os.getenv(var, "")
+        if "127.0.0.1" in endpoint or "localhost" in endpoint:
+            pytest.skip(f"{var} points to localhost — looks like a test override")

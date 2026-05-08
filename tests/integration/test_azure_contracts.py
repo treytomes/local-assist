@@ -53,7 +53,7 @@ async def test_stream_chat_yields_deltas(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Reply with the single word: yes"}],
-        max_tokens=16,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
@@ -71,7 +71,7 @@ async def test_stream_chat_yields_usage(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Hi"}],
-        max_tokens=8,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
@@ -86,7 +86,7 @@ async def test_stream_chat_no_error_chunks(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "ping"}],
-        max_tokens=8,
+        max_tokens=50,
     ):
         chunks.append(chunk)
     errors = [c for c in chunks if c["type"] == "error"]
@@ -102,7 +102,7 @@ async def test_mistral_stream_chat_yields_deltas(require_azure):
     async for chunk in azure_mod.stream_chat(
         "Mistral-Large-3",
         [{"role": "user", "content": "Reply with the single word: ok"}],
-        max_tokens=16,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
@@ -116,7 +116,7 @@ async def test_mistral_usage_chunk_present(require_azure):
     async for chunk in azure_mod.stream_chat(
         "Mistral-Large-3",
         [{"role": "user", "content": "Hi"}],
-        max_tokens=8,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
@@ -134,7 +134,7 @@ async def test_response_content_is_string(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Say: contract"}],
-        max_tokens=16,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
@@ -149,7 +149,7 @@ async def test_chunk_types_are_known_values(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Hi"}],
-        max_tokens=8,
+        max_tokens=50,
     ):
         chunks.append(chunk)
 
