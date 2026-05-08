@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     role            TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
     content         TEXT NOT NULL,
+    model           TEXT,
     timestamp       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -83,6 +84,10 @@ def init_db(conn: sqlite3.Connection) -> None:
         stmt = stmt.strip()
         if stmt:
             conn.execute(stmt)
+    # Idempotent migrations for existing databases
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "model" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
     conn.commit()
 
 
@@ -133,10 +138,10 @@ def delete_conversation(conn: sqlite3.Connection, conv_id: str) -> None:
 
 # --- Messages ---
 
-def insert_message(conn: sqlite3.Connection, msg_id: str, conv_id: str, role: str, content: str) -> sqlite3.Row:
+def insert_message(conn: sqlite3.Connection, msg_id: str, conv_id: str, role: str, content: str, model: str | None = None) -> sqlite3.Row:
     conn.execute(
-        "INSERT INTO messages (id, conversation_id, role, content) VALUES (?, ?, ?, ?)",
-        (msg_id, conv_id, role, content),
+        "INSERT INTO messages (id, conversation_id, role, content, model) VALUES (?, ?, ?, ?, ?)",
+        (msg_id, conv_id, role, content, model),
     )
     touch_conversation(conn, conv_id)
     return conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
@@ -147,3 +152,8 @@ def get_messages(conn: sqlite3.Connection, conv_id: str) -> list[sqlite3.Row]:
         "SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC",
         (conv_id,),
     ).fetchall()
+
+
+def delete_message(conn: sqlite3.Connection, msg_id: str) -> bool:
+    cursor = conn.execute("DELETE FROM messages WHERE id = ?", (msg_id,))
+    return cursor.rowcount > 0

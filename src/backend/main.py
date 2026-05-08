@@ -19,6 +19,9 @@ from .cost import (
 from . import router as provider_router
 from .rag import embed_conversation, retrieve_context
 from . import database as db
+from .mcp_server import mcp
+from .tools.datetime_tool import get_datetime as tool_get_datetime
+from .tools.system_info_tool import get_system_info as tool_get_system_info
 
 CONTEXT_WINDOW = 20  # default rolling message depth sent to model
 
@@ -48,6 +51,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount MCP server — streamable HTTP transport at /mcp
+app.mount("/mcp", mcp.streamable_http_app())
+
+# --- Tool registry (used by chat tool-use loop) ---
+
+# OpenAI-format tool definitions sent to the model
+TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_datetime",
+            "description": "Get the current date, time, and timezone. Use this whenever the user asks about the current time, date, day, or timezone.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "Optional IANA timezone name (e.g. 'America/Chicago'). Omit to use system local time.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_system_info",
+            "description": (
+                "Returns a snapshot of the host machine's hardware and OS state: "
+                "OS version, CPU model and core count, current CPU usage per core, "
+                "RAM and swap usage, GPU details, and system model name if available. "
+                "Use this when asked about the machine's specs, performance, memory, or hardware."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+]
+
+
+def execute_tool(name: str, arguments: dict) -> str:
+    """Execute a tool by name and return the result as a JSON string."""
+    import json
+    if name == "get_datetime":
+        result = tool_get_datetime(arguments.get("timezone"))
+        return json.dumps(result)
+    if name == "get_system_info":
+        result = tool_get_system_info()
+        return json.dumps(result)
+    return json.dumps({"error": f"Unknown tool: {name}"})
+
 
 def conn():
     return _conn
@@ -68,6 +126,7 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     stream: bool = True
     context_window: int | None = Field(default=None, ge=1, le=200)
+    is_retry: bool = False
 
 
 class ConversationCreate(BaseModel):
@@ -131,6 +190,14 @@ def delete_conv(conv_id: str):
     conn().commit()
 
 
+@app.delete("/v1/conversations/{conv_id}/messages/{msg_id}", status_code=204)
+def delete_message(conv_id: str, msg_id: str):
+    found = db.delete_message(conn(), msg_id)
+    if not found:
+        raise HTTPException(404, "Message not found")
+    conn().commit()
+
+
 @app.post("/v1/conversations/{conv_id}/embed")
 async def embed_conv(conv_id: str):
     """Embed a conversation's assistant turns into the RAG store."""
@@ -151,11 +218,11 @@ async def chat_completions(body: ChatRequest):
         with db.transaction(conn()):
             db.create_conversation(conn(), conv_id, "New conversation", body.model, "azure")
 
-    # Persist user messages
+    # Persist user message (skip on retry — already in the database)
     last_user = next((m for m in reversed(body.messages) if m.role == "user"), None)
-    if last_user:
+    if last_user and not body.is_retry:
         with db.transaction(conn()):
-            db.insert_message(conn(), str(uuid.uuid4()), conv_id, "user", last_user.content)
+            db.insert_message(conn(), str(uuid.uuid4()), conv_id, "user", last_user.content, model=None)
 
     # Apply rolling context window
     messages_for_model = [m.model_dump() for m in body.messages]
@@ -178,6 +245,37 @@ async def chat_completions(body: ChatRequest):
             else:
                 messages_for_model.insert(0, rag_msg)
 
+    # --- Tool-use loop ---
+    # First call includes tools so the model can request them.
+    # We allow one round of tool calls before streaming the final answer.
+    import json as _json
+
+    provider, resolved_model, tool_msg = await provider_router.call_with_tools(
+        body.model,
+        messages_for_model,
+        TOOLS,
+        body.max_tokens,
+    )
+
+    tool_calls = tool_msg.get("tool_calls") or []
+    if tool_calls:
+        # Append the assistant's tool-call message to the conversation
+        messages_for_model.append(tool_msg)
+        # Execute each tool and append results
+        for tc in tool_calls:
+            fn = tc["function"]
+            try:
+                args = _json.loads(fn.get("arguments") or "{}")
+            except _json.JSONDecodeError:
+                args = {}
+            result = execute_tool(fn["name"], args)
+            messages_for_model.append({
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": result,
+            })
+
+    # Stream the final response (with tool results in context if any were called)
     provider, resolved_model, stream_iter = await provider_router.stream_chat(
         body.model,
         messages_for_model,
@@ -201,7 +299,7 @@ async def chat_completions(body: ChatRequest):
 
         msg_id = str(uuid.uuid4())
         with db.transaction(conn()):
-            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text)
+            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
         return {
@@ -233,7 +331,7 @@ async def chat_completions(body: ChatRequest):
         # Persist assistant reply + usage after stream ends
         msg_id = str(uuid.uuid4())
         with db.transaction(conn()):
-            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text)
+            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
         yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': cost}})}\n\n"

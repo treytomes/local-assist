@@ -1,5 +1,7 @@
 import React, { useEffect } from 'react'
-import { ConfigProvider, theme } from 'antd'
+import { ConfigProvider, Tabs, theme } from 'antd'
+import { ApiOutlined, MessageOutlined } from '@ant-design/icons'
+import ChatView from './components/ChatView'
 import DiagnosticDashboard from './components/DiagnosticDashboard'
 import { useAppStore } from './store'
 import './styles/index.css'
@@ -53,7 +55,43 @@ export default function App(): React.ReactElement {
 
   return (
     <ConfigProvider theme={antdTheme}>
-      <DiagnosticDashboard />
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: 'var(--vscode-bg)' }}>
+        <Tabs
+          defaultActiveKey="chat"
+          type="card"
+          size="small"
+          style={{ flex: 1, minHeight: 0 }}
+          tabBarStyle={{
+            margin: 0,
+            padding: '4px 8px 0',
+            background: 'var(--vscode-titlebar)',
+            borderBottom: '1px solid var(--vscode-border)',
+            flexShrink: 0
+          }}
+          items={[
+            {
+              key: 'chat',
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <MessageOutlined style={{ fontSize: 13 }} />
+                  Chat
+                </span>
+              ),
+              children: <ChatView />
+            },
+            {
+              key: 'diagnostics',
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <ApiOutlined style={{ fontSize: 13 }} />
+                  Diagnostics
+                </span>
+              ),
+              children: <DiagnosticDashboard />
+            }
+          ]}
+        />
+      </div>
     </ConfigProvider>
   )
 }

@@ -36,6 +36,32 @@ async def ensure_model(model: str = DEFAULT_MODEL) -> None:
         pass
 
 
+async def call_with_tools(
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    max_tokens: int = 2048,
+) -> dict:
+    """
+    Non-streaming tool call. Returns the assistant message dict:
+      {"role": "assistant", "content": ..., "tool_calls": [...] | None}
+    """
+    url = f"{OLLAMA_BASE}/api/chat"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "stream": False,
+        "options": {"num_predict": max_tokens},
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            raise RuntimeError(f"Ollama HTTP {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return data["message"]
+
+
 async def stream_chat(
     model: str,
     messages: list[dict],

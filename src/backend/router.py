@@ -61,6 +61,29 @@ async def stream_chat(
         return provider, resolved, azure.stream_chat(resolved, messages, max_tokens, temperature)
 
 
+async def call_with_tools(
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    max_tokens: int = 2048,
+) -> tuple[str, str, dict]:
+    """
+    Returns (provider, resolved_model, assistant_message_dict).
+    Falls back to Ollama if Azure is down.
+    """
+    provider, resolved = _resolve_provider_model(model)
+    if provider == "azure":
+        if not await azure_is_available():
+            provider = "ollama"
+            resolved = ollama.DEFAULT_MODEL
+            await ollama.ensure_model(resolved)
+    if provider == "ollama":
+        msg = await ollama.call_with_tools(resolved, messages, tools, max_tokens)
+    else:
+        msg = await azure.call_with_tools(resolved, messages, tools, max_tokens)
+    return provider, resolved, msg
+
+
 async def get_health() -> dict:
     az = await azure.health_check()
     ol = await ollama.health_check()

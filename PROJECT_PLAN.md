@@ -29,18 +29,19 @@ Tavily Search API — free tier (1k calls/month) for development.
 
 ---
 
-## Tech Stack (matching code-pad)
+## Tech Stack
 
 | Layer         | Technology                                              |
 |---------------|---------------------------------------------------------|
-| Desktop shell | Electron 30                                             |
+| Desktop shell | Electron 33                                             |
 | Frontend      | React 19 + TypeScript + Vite 6                          |
-| UI components | Ant Design 6 + Tailwind CSS 4                           |
-| State         | Zustand 5                                               |
+| UI components | Ant Design 5 + Tailwind CSS 4                           |
+| State         | Zustand 5 (with `persist` middleware)                   |
 | Local DB      | better-sqlite3 (conversations, cost tracking, RAG)      |
 | Vector store  | sqlite-vec (RAG memory, embedded in same DB file)       |
 | IPC           | Context-bridged `window.electronAPI`                    |
 | Backend       | FastAPI (Python) — sidecar process spawned by Electron  |
+| Tool protocol | MCP via `mcp[cli]` — FastMCP mounted as ASGI sub-app    |
 | Voice I/O     | Azure TTS/STT via HTTP; Realtime via WebSocket          |
 
 ---
@@ -57,6 +58,10 @@ Tavily Search API — free tier (1k calls/month) for development.
 | Context window | Rolling window (configurable depth, e.g. last 20 messages sent to model) |
 | Cross-conversation memory | RAG via sqlite-vec — past conversations embedded and retrieved at session start |
 | Cost visibility | Running cost ticker per conversation + cost report comparing gpt-5.3-chat vs Mistral-Large-3 |
+| Tool use | OpenAI function-calling format; non-streaming first call detects tool_calls, executes, then streams final answer |
+| MCP | FastAPI backend doubles as MCP server at `/mcp` via `streamable_http_app()` |
+| Assistant persona | Named "Mara" — configurable system prompt, persisted to localStorage |
+| Inference params | Per-model (temperature, max tokens, context window), persisted to localStorage |
 
 ---
 
@@ -70,35 +75,48 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] `/v1/health` — Azure reachability check (drives Ollama fallback)
 - [x] SQLite schema:
   - `conversations` — id, title, created_at, updated_at, model, provider
-  - `messages` — id, conversation_id, role, content, timestamp
+  - `messages` — id, conversation_id, role, content, timestamp, model
   - `usage` — id, conversation_id, message_id, provider, model, prompt_tokens, completion_tokens, cost_usd, timestamp
   - `pricing` — provider, model, input_cost_per_1k, output_cost_per_1k, last_updated (seeded at startup)
   - `embeddings` — id, conversation_id, chunk_text, vector (sqlite-vec column)
 - [x] `/v1/usage` — cost summary (per conversation, daily, by model comparison)
 - [x] `/v1/pricing` — list all pricing rows; `GET /v1/pricing/{provider}/{model}` fetch one; `POST` upsert (manual rate override)
-- [x] Pricing seed: all 9 deployed models with verified retail rates (gpt-5.3-chat and Mistral-Large-3 estimated; updatable via POST)
+- [x] Pricing seed: all 9 deployed models with verified retail rates
 - [x] RAG: embed conversation summaries at close; retrieve top-k at new conversation start; chunks injected as system message prefix on each chat turn
 - [x] Rolling context window: configurable depth (default 20 messages) truncated before sending to model; leading system message always preserved
 - [x] `PATCH /v1/conversations/{id}` — update title and/or model on an existing conversation
+- [x] `DELETE /v1/conversations/{id}/messages/{msg_id}` — remove individual messages
 - [x] Ollama fallback: if Azure unreachable, auto-pull `gemma3:1b` if not already present
 - [x] Add `TAVILY_API_KEY` to `.env`
 - [x] Unit + integration test suite — 185 collected, 120 unit, 96% coverage; `./test.sh` / `./test.sh --integration` / `./test.sh --azure`
+- [x] MCP server: FastAPI backend mounts `FastMCP` at `/mcp` (`streamable_http_app()`)
+  - `get_datetime` tool — current date/time/timezone with optional IANA tz override
+  - `get_system_info` tool — OS, CPU (model, cores, per-core usage%), RAM/swap, GPU (nvidia-smi → rocm-smi → lspci), system model via DMI
+- [x] Tool-use loop in `/v1/chat/completions`: non-streaming probe call → execute any tool_calls → stream final response
+- [x] `is_retry` flag to prevent duplicate user message persistence on retry
 
-### M2 — Electron shell + chat UI (Week 2)
+### M2 — Electron shell + chat UI ✅
 **Goal:** Working desktop app matching code-pad visual style.
 
 - [x] Init Electron project (electron-vite 3, React 19, TypeScript 5, Vite 6)
 - [x] VS Code dark theme CSS variables + Ant Design 5 dark algorithm token overrides
-- [x] Diagnostic Dashboard (first screen):
+- [x] Diagnostic Dashboard tab:
   - Provider health panel — Azure + Ollama status, 30s auto-refresh, manual refresh
-  - API tester — preset dropdown, method/path/body editor, live response viewer with status + elapsed time
-- [ ] 3-panel layout:
-  - **Left sidebar** — conversation list (search, star, rename, delete); new conversation button
-  - **Main panel** — chat thread: message bubbles, timestamps, model+provider badge per message, streaming token rendering
-  - **Right panel** (collapsible) — cost dashboard + provider status indicators
-- [ ] Message composer: text input + mic button + image attach + send
-- [ ] Model switcher in header: `gpt-5.3-chat` ↔ `Mistral-Large-3` toggle with per-model cost display (uses `PATCH /v1/conversations/{id}`)
-- [ ] Rolling context window depth setting (default: 20 messages, configurable via `context_window` chat param)
+  - API tester — preset dropdown (all endpoints, grouped), path variable substitution, method/body editor, live response viewer with status + elapsed time
+- [x] Tabbed shell — Diagnostic Dashboard pinned as first tab; Chat as second tab
+- [x] 3-panel chat layout:
+  - **Left sidebar** — conversation list (search, rename, delete); new conversation button; auto-scroll; active highlight; relative timestamps; last-used conversation restored on reload
+  - **Main panel** — chat thread: message bubbles (user right/blue, assistant left), timestamps, streaming cursor, retry button on last user message, per-message delete
+  - **Right panel** (collapsible) — conversation cost + token counts; provider health tags
+- [x] Message composer: auto-growing textarea, Enter to send / Shift+Enter for newline, model selector dropdown, streaming loading state
+- [x] Model switcher: `gpt-5.3-chat` ↔ `Mistral-Large-3` dropdown; PATCH persists to backend
+- [x] Settings modal (gear icon):
+  - **Models tab** — per-model: temperature (hidden for gpt-5.3-chat), max tokens, context window depth; draft state committed on Save
+  - **System Prompt tab** — free-text; defaults to Mara persona prompt
+- [x] Context Inspector drawer (bug icon) — Connection, Model Parameters, Available Tools, full reconstructed message list with context window truncation preview
+- [x] Auto-title: first user message (≤60 chars) used as conversation title; patched to backend
+- [x] Retry: re-sends last user message, discards last assistant turn from history and DB, avoids stale closure via `historyOverride` parameter
+- [x] Settings and active conversation persisted to localStorage (Zustand `persist` middleware)
 
 ### M3 — Speech I/O (Week 2–3)
 **Goal:** Voice in, voice out via Azure.
@@ -151,7 +169,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 
 - [ ] System tray icon with quick-ask popup
 - [ ] Global hotkey to open/focus window
-- [ ] Settings modal: provider priority, default model, TTS voice, rolling window depth, theme, cost alert threshold
+- [ ] Settings modal: provider priority, default model, TTS voice, theme, cost alert threshold
 - [ ] Bundle `.venv` into packaged app via electron-builder `extraResources`; validate that `sqlite-vec` native extension survives (consider PyInstaller sidecar as alternative if `.so` loading breaks)
 - [ ] electron-builder: Linux AppImage + Windows NSIS + macOS DMG
 - [ ] Auto-update scaffold (electron-updater)
@@ -166,38 +184,43 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   ├── renderer/                  # React UI (Vite, renderer process)
 │   │   ├── components/
 │   │   │   ├── DiagnosticDashboard.tsx  ✓
-│   │   │   ├── ChatThread.tsx
-│   │   │   ├── MessageComposer.tsx
-│   │   │   ├── ConversationList.tsx
-│   │   │   ├── ModelSwitcher.tsx
-│   │   │   ├── CostDashboard.tsx
-│   │   │   └── SettingsModal.tsx
+│   │   │   ├── ChatView.tsx             ✓  3-panel layout + send/retry/delete logic
+│   │   │   ├── ChatThread.tsx           ✓  message bubbles, streaming cursor
+│   │   │   ├── MessageComposer.tsx      ✓  textarea, model selector, send button
+│   │   │   ├── ConversationList.tsx     ✓  search, rename, delete, active state
+│   │   │   ├── RightPanel.tsx           ✓  cost + provider health
+│   │   │   ├── SettingsModal.tsx        ✓  per-model params + system prompt
+│   │   │   └── ContextInspector.tsx     ✓  debug drawer
 │   │   ├── styles/index.css       ✓ VS Code dark theme + Tailwind v4
-│   │   ├── store.ts               ✓ Zustand 5 store
+│   │   ├── store.ts               ✓ Zustand 5 store + persist middleware
 │   │   ├── electron.d.ts          ✓ window.electronAPI types
 │   │   ├── index.html             ✓
 │   │   ├── main.tsx               ✓ React entry
-│   │   └── App.tsx                ✓ AntD ConfigProvider dark theme
+│   │   └── App.tsx                ✓ AntD ConfigProvider dark theme + Tabs
 │   ├── main/
 │   │   ├── index.ts               ✓ Electron main + IPC + sidecar spawn
 │   │   ├── audio.ts               # TTS/STT bridge (M3)
 │   │   └── google-auth.ts         # OAuth flow (M6)
 │   ├── preload/index.ts           ✓ contextBridge → window.electronAPI
-│   ├── backend/                   # FastAPI sidecar (Python) ✓ M1 complete
-│   │   ├── main.py
-│   │   ├── router.py
-│   │   ├── rag.py
-│   │   ├── cost.py
-│   │   ├── database.py
+│   ├── backend/                   # FastAPI sidecar (Python)
+│   │   ├── main.py                ✓ routes, tool-use loop, MCP mount
+│   │   ├── router.py              ✓ provider routing + call_with_tools
+│   │   ├── mcp_server.py          ✓ FastMCP — get_datetime, get_system_info
+│   │   ├── rag.py                 ✓ sqlite-vec embed + retrieve
+│   │   ├── cost.py                ✓ usage recording + reporting
+│   │   ├── database.py            ✓ schema, migrations, CRUD
 │   │   ├── providers/
-│   │   │   ├── azure.py
-│   │   │   └── ollama.py
+│   │   │   ├── azure.py           ✓ streaming + tool call support
+│   │   │   └── ollama.py          ✓ streaming + tool call support
 │   │   └── tools/
+│   │       ├── datetime_tool.py   ✓ current date/time/timezone
+│   │       ├── system_info_tool.py ✓ CPU/RAM/GPU/OS snapshot
 │   │       ├── search.py          # Tavily (M5)
 │   │       └── google.py          # Calendar / Tasks / Drive (M6)
-│   └── shared/types.ts            ✓ HealthStatus, ApiResponse, etc.
+│   └── shared/types.ts            ✓ Conversation, Message, ModelId, etc.
 ├── .env
 ├── package.json                   ✓
+├── requirements.txt               ✓
 ├── tsconfig.json                  ✓ project references
 ├── tsconfig.node.json             ✓ main + preload
 ├── tsconfig.web.json              ✓ renderer

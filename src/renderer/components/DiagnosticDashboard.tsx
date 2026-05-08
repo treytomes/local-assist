@@ -30,7 +30,11 @@ interface PresetGroup {
   options: Array<PresetEndpoint & { value: number }>
 }
 
-const PRESETS: PresetEndpoint[] = [
+interface PresetWithVars extends PresetEndpoint {
+  defaultVars?: Record<string, string>
+}
+
+const PRESETS: PresetWithVars[] = [
   // Health
   { label: 'GET /v1/health', method: 'GET', path: '/v1/health' },
   // Conversations
@@ -39,14 +43,14 @@ const PRESETS: PresetEndpoint[] = [
     label: 'POST /v1/conversations',
     method: 'POST',
     path: '/v1/conversations',
-    body: JSON.stringify({ title: 'Test', model: 'gpt-5.3-chat' }, null, 2)
+    body: JSON.stringify({ title: 'Test conversation', model: 'gpt-5.3-chat' }, null, 2)
   },
   { label: 'GET /v1/conversations/{conv_id}', method: 'GET', path: '/v1/conversations/{conv_id}' },
   {
     label: 'PATCH /v1/conversations/{conv_id}',
     method: 'PATCH',
     path: '/v1/conversations/{conv_id}',
-    body: JSON.stringify({ title: 'Renamed', model: 'Mistral-Large-3' }, null, 2)
+    body: JSON.stringify({ title: 'Renamed', model: 'gpt-5.3-chat' }, null, 2)
   },
   { label: 'DELETE /v1/conversations/{conv_id}', method: 'DELETE', path: '/v1/conversations/{conv_id}' },
   { label: 'POST /v1/conversations/{conv_id}/embed', method: 'POST', path: '/v1/conversations/{conv_id}/embed' },
@@ -56,23 +60,39 @@ const PRESETS: PresetEndpoint[] = [
     method: 'POST',
     path: '/v1/chat/completions',
     body: JSON.stringify(
-      { messages: [{ role: 'user', content: 'Hello' }], stream: false, model: 'gpt-5.3-chat' },
+      {
+        model: 'gpt-5.3-chat',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 2048,
+        temperature: 0.7,
+        stream: false,
+      },
       null,
       2
     )
   },
-  { label: 'GET /v1/context?query=hello', method: 'GET', path: '/v1/context?query=hello' },
+  {
+    label: 'GET /v1/context',
+    method: 'GET',
+    path: '/v1/context?query=hello'
+  },
   // Usage
-  { label: 'GET /v1/usage', method: 'GET', path: '/v1/usage' },
+  { label: 'GET /v1/usage', method: 'GET', path: '/v1/usage?days=30' },
   { label: 'GET /v1/usage/{conv_id}', method: 'GET', path: '/v1/usage/{conv_id}' },
   // Pricing
   { label: 'GET /v1/pricing', method: 'GET', path: '/v1/pricing' },
-  { label: 'GET /v1/pricing/azure/gpt-5.3-chat', method: 'GET', path: '/v1/pricing/azure/gpt-5.3-chat' },
   {
-    label: 'POST /v1/pricing/azure/gpt-5.3-chat',
+    label: 'GET /v1/pricing/{provider}/{model}',
+    method: 'GET',
+    path: '/v1/pricing/{provider}/{model}',
+    defaultVars: { provider: 'azure', model: 'gpt-5.3-chat' }
+  },
+  {
+    label: 'POST /v1/pricing/{provider}/{model}',
     method: 'POST',
-    path: '/v1/pricing/azure/gpt-5.3-chat',
-    body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2)
+    path: '/v1/pricing/{provider}/{model}',
+    body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2),
+    defaultVars: { provider: 'azure', model: 'gpt-5.3-chat' }
   },
 ]
 
@@ -157,7 +177,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
   const [selectedPresetIdx, setSelectedPresetIdx] = useState(0)
   const [method, setMethod] = useState<HttpMethod>('GET')
   const [path, setPath] = useState('/v1/health')
-  const [convId, setConvId] = useState('')
+  const [pathVars, setPathVars] = useState<Record<string, string>>({})
   const [body, setBody] = useState('')
   const [apiResponse, setApiResponse] = useState<ApiResponse | null>(null)
   const [sending, setSending] = useState(false)
@@ -185,16 +205,26 @@ export default function DiagnosticDashboard(): React.ReactElement {
     return () => clearInterval(id)
   }, [fetchHealth])
 
+  function extractVarNames(p: string): string[] {
+    return [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
+  }
+
   function applyPreset(idx: number): void {
     const preset = PRESETS[idx]
     setSelectedPresetIdx(idx)
     setMethod(preset.method)
     setPath(preset.path)
     setBody(preset.body ?? '')
+    // Seed default values; preserve existing values for vars that are already set
+    const vars: Record<string, string> = {}
+    for (const name of extractVarNames(preset.path)) {
+      vars[name] = pathVars[name] ?? preset.defaultVars?.[name] ?? ''
+    }
+    setPathVars(vars)
   }
 
   function resolvePath(raw: string): string {
-    return raw.replace(/\{conv_id\}/g, convId || '{conv_id}')
+    return raw.replace(/\{(\w+)\}/g, (_, name) => pathVars[name] || `{${name}}`)
   }
 
   async function sendRequest(): Promise<void> {
@@ -224,7 +254,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
         parsed !== null &&
         'id' in parsed
       ) {
-        setConvId(String((parsed as Record<string, unknown>).id))
+        setPathVars((prev) => ({ ...prev, conv_id: String((parsed as Record<string, unknown>).id) }))
       }
     } catch (err) {
       const elapsedMs = Math.round(performance.now() - start)
@@ -241,7 +271,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
   }
 
   const showBody = ['POST', 'PUT', 'PATCH'].includes(method)
-  const showConvId = path.includes('{conv_id}')
+  const pathVarNames = extractVarNames(path)
   const lastCheckedStr = healthLastChecked ? healthLastChecked.toLocaleTimeString() : '—'
 
   return (
@@ -395,21 +425,30 @@ export default function DiagnosticDashboard(): React.ReactElement {
               />
             </Space.Compact>
 
-            {/* conv_id variable — shown when path contains {conv_id} */}
-            {showConvId && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, minWidth: 48 }}>
-                  conv_id:
+            {/* Path variable inputs — one row per {variable} found in path */}
+            {pathVarNames.map((name) => (
+              <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Text
+                  style={{
+                    color: 'var(--vscode-text-muted)',
+                    fontSize: 12,
+                    minWidth: 64,
+                    fontFamily: 'monospace'
+                  }}
+                >
+                  {`{${name}}`}
                 </Text>
                 <Input
                   size="small"
-                  value={convId}
-                  onChange={(e) => setConvId(e.target.value)}
-                  placeholder="paste a conversation ID here"
+                  value={pathVars[name] ?? ''}
+                  onChange={(e) =>
+                    setPathVars((prev) => ({ ...prev, [name]: e.target.value }))
+                  }
+                  placeholder={name}
                   style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
                 />
               </div>
-            )}
+            ))}
           </div>
 
           {/* Body textarea */}

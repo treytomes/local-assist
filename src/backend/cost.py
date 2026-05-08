@@ -129,12 +129,14 @@ def get_conversation_cost(conn: sqlite3.Connection, conv_id: str) -> dict:
         SELECT
             SUM(prompt_tokens)     AS prompt_tokens,
             SUM(completion_tokens) AS completion_tokens,
-            SUM(cost_usd)          AS total_cost
+            SUM(cost_usd)          AS total_cost_usd
         FROM usage WHERE conversation_id = ?
         """,
         (conv_id,),
     ).fetchone()
-    return dict(row) if row else {"prompt_tokens": 0, "completion_tokens": 0, "total_cost": 0.0}
+    if not row or row["total_cost_usd"] is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_cost_usd": 0.0}
+    return dict(row)
 
 
 def get_daily_costs(conn: sqlite3.Connection, days: int = 30) -> list[dict]:

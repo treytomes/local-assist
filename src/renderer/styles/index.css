@@ -12,6 +12,27 @@
   --vscode-warning: #dcdcaa;
   --vscode-error: #f44747;
   --vscode-sidebar: #333333;
+  --vscode-titlebar: #1e1e1e;
+}
+
+/* Make AntD Tabs fill available height */
+.ant-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.ant-tabs-content {
+  height: 100%;
+}
+.ant-tabs-tabpane {
+  height: 100%;
+  overflow: hidden;
 }
 
 *,
@@ -46,4 +67,22 @@ body,
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--vscode-text-muted);
+}
+
+/* Streaming cursor blink */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.streaming-cursor::after {
+  content: '▋';
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--vscode-accent);
+  animation: blink 0.8s step-start infinite;
+}
+
+/* Conversation row hover highlight */
+.conv-item:hover {
+  background: var(--vscode-surface) !important;
 }

@@ -126,6 +126,36 @@ async def stream_chat(
             yield {"type": "error", "message": str(exc)}
 
 
+async def call_with_tools(
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    max_tokens: int = 2048,
+) -> dict:
+    """
+    Non-streaming call that includes tool definitions.
+    Returns the raw message dict from the first choice:
+      {"role": "assistant", "content": ..., "tool_calls": [...] | None}
+    """
+    url = _deployment_url(model, "chat/completions")
+    payload: dict = {
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+    if _is_gpt(model):
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(url, headers=_headers(), json=payload)
+        if r.status_code != 200:
+            raise RuntimeError(f"Azure HTTP {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return data["choices"][0]["message"]
+
+
 async def get_embedding(text: str) -> list[float]:
     url = _deployment_url(EMBEDDING_MODEL, "embeddings")
     payload = {"input": text}
