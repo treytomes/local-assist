@@ -25,8 +25,15 @@ import type { ApiResponse, HealthStatus, HttpMethod, PresetEndpoint } from '@sha
 const { Text, Title } = Typography
 const { TextArea } = Input
 
+interface PresetGroup {
+  label: string
+  options: Array<PresetEndpoint & { value: number }>
+}
+
 const PRESETS: PresetEndpoint[] = [
+  // Health
   { label: 'GET /v1/health', method: 'GET', path: '/v1/health' },
+  // Conversations
   { label: 'GET /v1/conversations', method: 'GET', path: '/v1/conversations' },
   {
     label: 'POST /v1/conversations',
@@ -34,19 +41,16 @@ const PRESETS: PresetEndpoint[] = [
     path: '/v1/conversations',
     body: JSON.stringify({ title: 'Test', model: 'gpt-5.3-chat' }, null, 2)
   },
-  { label: 'GET /v1/usage', method: 'GET', path: '/v1/usage' },
-  { label: 'GET /v1/pricing', method: 'GET', path: '/v1/pricing' },
+  { label: 'GET /v1/conversations/{conv_id}', method: 'GET', path: '/v1/conversations/{conv_id}' },
   {
-    label: 'GET /v1/pricing/azure/gpt-5.3-chat',
-    method: 'GET',
-    path: '/v1/pricing/azure/gpt-5.3-chat'
+    label: 'PATCH /v1/conversations/{conv_id}',
+    method: 'PATCH',
+    path: '/v1/conversations/{conv_id}',
+    body: JSON.stringify({ title: 'Renamed', model: 'Mistral-Large-3' }, null, 2)
   },
-  {
-    label: 'POST /v1/pricing/azure/gpt-5.3-chat',
-    method: 'POST',
-    path: '/v1/pricing/azure/gpt-5.3-chat',
-    body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2)
-  },
+  { label: 'DELETE /v1/conversations/{conv_id}', method: 'DELETE', path: '/v1/conversations/{conv_id}' },
+  { label: 'POST /v1/conversations/{conv_id}/embed', method: 'POST', path: '/v1/conversations/{conv_id}/embed' },
+  // Chat
   {
     label: 'POST /v1/chat/completions',
     method: 'POST',
@@ -57,7 +61,42 @@ const PRESETS: PresetEndpoint[] = [
       2
     )
   },
-  { label: 'GET /v1/context?query=hello', method: 'GET', path: '/v1/context?query=hello' }
+  { label: 'GET /v1/context?query=hello', method: 'GET', path: '/v1/context?query=hello' },
+  // Usage
+  { label: 'GET /v1/usage', method: 'GET', path: '/v1/usage' },
+  { label: 'GET /v1/usage/{conv_id}', method: 'GET', path: '/v1/usage/{conv_id}' },
+  // Pricing
+  { label: 'GET /v1/pricing', method: 'GET', path: '/v1/pricing' },
+  { label: 'GET /v1/pricing/azure/gpt-5.3-chat', method: 'GET', path: '/v1/pricing/azure/gpt-5.3-chat' },
+  {
+    label: 'POST /v1/pricing/azure/gpt-5.3-chat',
+    method: 'POST',
+    path: '/v1/pricing/azure/gpt-5.3-chat',
+    body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2)
+  },
+]
+
+const PRESET_GROUPS: PresetGroup[] = [
+  {
+    label: 'Health',
+    options: [0].map((i) => ({ ...PRESETS[i], value: i }))
+  },
+  {
+    label: 'Conversations',
+    options: [1, 2, 3, 4, 5, 6].map((i) => ({ ...PRESETS[i], value: i }))
+  },
+  {
+    label: 'Chat',
+    options: [7, 8].map((i) => ({ ...PRESETS[i], value: i }))
+  },
+  {
+    label: 'Usage',
+    options: [9, 10].map((i) => ({ ...PRESETS[i], value: i }))
+  },
+  {
+    label: 'Pricing',
+    options: [11, 12, 13].map((i) => ({ ...PRESETS[i], value: i }))
+  },
 ]
 
 const HTTP_METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -118,6 +157,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
   const [selectedPresetIdx, setSelectedPresetIdx] = useState(0)
   const [method, setMethod] = useState<HttpMethod>('GET')
   const [path, setPath] = useState('/v1/health')
+  const [convId, setConvId] = useState('')
   const [body, setBody] = useState('')
   const [apiResponse, setApiResponse] = useState<ApiResponse | null>(null)
   const [sending, setSending] = useState(false)
@@ -153,17 +193,22 @@ export default function DiagnosticDashboard(): React.ReactElement {
     setBody(preset.body ?? '')
   }
 
+  function resolvePath(raw: string): string {
+    return raw.replace(/\{conv_id\}/g, convId || '{conv_id}')
+  }
+
   async function sendRequest(): Promise<void> {
     setSending(true)
     setApiResponse(null)
-    const url = `${backendUrl}${path.startsWith('/') ? path : '/' + path}`
+    const resolved = resolvePath(path)
+    const url = `${backendUrl}${resolved.startsWith('/') ? resolved : '/' + resolved}`
     const start = performance.now()
     try {
       const hasBody = ['POST', 'PUT', 'PATCH'].includes(method) && body.trim()
       const res = await fetch(url, {
         method,
         headers: hasBody ? { 'Content-Type': 'application/json' } : undefined,
-        body: hasBody ? body : undefined
+        body: hasBody ? body : undefined,
       })
       const elapsedMs = Math.round(performance.now() - start)
       const contentType = res.headers.get('content-type') ?? ''
@@ -171,6 +216,16 @@ export default function DiagnosticDashboard(): React.ReactElement {
         ? await res.json()
         : await res.text()
       setApiResponse({ status: res.status, statusText: res.statusText, elapsedMs, body: parsed })
+      // Auto-fill conv_id when a conversation is created
+      if (
+        res.status === 201 &&
+        resolved === '/v1/conversations' &&
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        'id' in parsed
+      ) {
+        setConvId(String((parsed as Record<string, unknown>).id))
+      }
     } catch (err) {
       const elapsedMs = Math.round(performance.now() - start)
       setApiResponse({
@@ -186,6 +241,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
   }
 
   const showBody = ['POST', 'PUT', 'PATCH'].includes(method)
+  const showConvId = path.includes('{conv_id}')
   const lastCheckedStr = healthLastChecked ? healthLastChecked.toLocaleTimeString() : '—'
 
   return (
@@ -311,7 +367,10 @@ export default function DiagnosticDashboard(): React.ReactElement {
                 size="small"
                 value={selectedPresetIdx}
                 onChange={applyPreset}
-                options={PRESETS.map((p, i) => ({ label: p.label, value: i }))}
+                options={PRESET_GROUPS.map((g) => ({
+                  label: g.label,
+                  options: g.options.map((o) => ({ label: o.label, value: o.value }))
+                }))}
                 style={{ flex: 1, fontSize: 12 }}
                 popupMatchSelectWidth={false}
               />
@@ -335,6 +394,22 @@ export default function DiagnosticDashboard(): React.ReactElement {
                 onPressEnter={sendRequest}
               />
             </Space.Compact>
+
+            {/* conv_id variable — shown when path contains {conv_id} */}
+            {showConvId && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, minWidth: 48 }}>
+                  conv_id:
+                </Text>
+                <Input
+                  size="small"
+                  value={convId}
+                  onChange={(e) => setConvId(e.target.value)}
+                  placeholder="paste a conversation ID here"
+                  style={{ flex: 1, fontFamily: 'monospace', fontSize: 12 }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Body textarea */}
