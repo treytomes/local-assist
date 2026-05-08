@@ -53,7 +53,9 @@ async def test_stream_chat_yields_deltas(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Reply with the single word: yes"}],
-        max_tokens=50,
+        # gpt-5.3-chat is a reasoning model that consumes tokens internally
+        # before emitting output; 200 ensures output is not cut off.
+        max_tokens=200,
     ):
         chunks.append(chunk)
 
@@ -71,7 +73,7 @@ async def test_stream_chat_yields_usage(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Hi"}],
-        max_tokens=50,
+        max_tokens=200,
     ):
         chunks.append(chunk)
 
@@ -86,7 +88,7 @@ async def test_stream_chat_no_error_chunks(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "ping"}],
-        max_tokens=50,
+        max_tokens=200,
     ):
         chunks.append(chunk)
     errors = [c for c in chunks if c["type"] == "error"]
@@ -126,6 +128,39 @@ async def test_mistral_usage_chunk_present(require_azure):
 
 
 # ---------------------------------------------------------------------------
+# Streaming chat — gpt-4o (vision-capable model, text path)
+# ---------------------------------------------------------------------------
+
+async def test_gpt4o_stream_chat_yields_deltas(require_azure):
+    chunks = []
+    async for chunk in azure_mod.stream_chat(
+        "gpt-4o",
+        [{"role": "user", "content": "Reply with the single word: yes"}],
+        max_tokens=50,
+    ):
+        chunks.append(chunk)
+
+    deltas = [c for c in chunks if c["type"] == "delta"]
+    assert len(deltas) > 0
+    assert not any(c["type"] == "error" for c in chunks)
+
+
+async def test_gpt4o_usage_chunk_present(require_azure):
+    chunks = []
+    async for chunk in azure_mod.stream_chat(
+        "gpt-4o",
+        [{"role": "user", "content": "Hi"}],
+        max_tokens=50,
+    ):
+        chunks.append(chunk)
+
+    usage = [c for c in chunks if c["type"] == "usage"]
+    assert len(usage) == 1
+    assert usage[0]["prompt_tokens"] > 0
+    assert usage[0]["completion_tokens"] > 0
+
+
+# ---------------------------------------------------------------------------
 # Response shape contracts
 # ---------------------------------------------------------------------------
 
@@ -134,7 +169,7 @@ async def test_response_content_is_string(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Say: contract"}],
-        max_tokens=50,
+        max_tokens=200,
     ):
         chunks.append(chunk)
 
@@ -149,7 +184,7 @@ async def test_chunk_types_are_known_values(require_azure):
     async for chunk in azure_mod.stream_chat(
         "gpt-5.3-chat",
         [{"role": "user", "content": "Hi"}],
-        max_tokens=50,
+        max_tokens=200,
     ):
         chunks.append(chunk)
 

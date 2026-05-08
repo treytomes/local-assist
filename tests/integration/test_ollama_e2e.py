@@ -257,6 +257,63 @@ def test_conversation_usage_reflects_tokens(live_server, require_ollama):
 
 
 # ---------------------------------------------------------------------------
+# gemma3:1b — direct Ollama model request
+# ---------------------------------------------------------------------------
+
+def test_direct_ollama_model_chat(live_server, require_ollama):
+    """Request gemma3:1b by name (not as a fallback) to test the Ollama-native path."""
+    r = httpx.post(
+        f"{live_server}/v1/chat/completions",
+        json={
+            "model": "gemma3:1b",
+            "messages": [{"role": "user", "content": "Reply with one word: hello"}],
+            "stream": False,
+            "max_tokens": 16,
+        },
+        timeout=60,
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "ollama"
+    assert data["model"] == "gemma3:1b"
+    assert len(data["message"]["content"]) > 0
+    assert data["usage"]["cost_usd"] == 0.0
+
+
+def test_direct_ollama_model_streaming(live_server, require_ollama):
+    r = httpx.post(
+        f"{live_server}/v1/chat/completions",
+        json={
+            "model": "gemma3:1b",
+            "messages": [{"role": "user", "content": "One word: ok"}],
+            "stream": True,
+            "max_tokens": 16,
+        },
+        timeout=60,
+    )
+    assert r.status_code == 200
+    events = parse_sse(r.text)
+    done = next((e for e in events if e["type"] == "done"), None)
+    assert done is not None
+    assert done["provider"] == "ollama"
+    assert done["model"] == "gemma3:1b"
+
+
+def test_direct_ollama_model_usage_is_free(live_server, require_ollama):
+    r = httpx.post(
+        f"{live_server}/v1/chat/completions",
+        json={
+            "model": "gemma3:1b",
+            "messages": [{"role": "user", "content": "ping"}],
+            "stream": False,
+            "max_tokens": 8,
+        },
+        timeout=60,
+    )
+    assert r.json()["usage"]["cost_usd"] == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Isolation: no bleed between test conversations
 # ---------------------------------------------------------------------------
 
