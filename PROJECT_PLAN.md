@@ -62,24 +62,45 @@ Tavily Search API — free tier (1k calls/month) for development.
 
 ## Milestones
 
-### M1 — Backend foundation (Week 1)
+### M1 — Backend foundation ✅
 **Goal:** Running FastAPI sidecar with provider routing, cost tracking, and RAG memory.
 
-- [ ] Scaffold `src/backend/` FastAPI app
-- [ ] `/v1/chat/completions` — OpenAI-compatible, streams tokens, records usage
-- [ ] `/v1/health` — Azure reachability check (drives Ollama fallback)
-- [ ] SQLite schema:
+- [x] Scaffold `src/backend/` FastAPI app
+- [x] `/v1/chat/completions` — OpenAI-compatible, streams tokens, records usage
+- [x] `/v1/health` — Azure reachability check (drives Ollama fallback)
+- [x] SQLite schema:
   - `conversations` — id, title, created_at, updated_at, model, provider
   - `messages` — id, conversation_id, role, content, timestamp
   - `usage` — id, conversation_id, message_id, provider, model, prompt_tokens, completion_tokens, cost_usd, timestamp
-  - `pricing` — provider, model, input_cost_per_1k, output_cost_per_1k (seeded at startup)
+  - `pricing` — provider, model, input_cost_per_1k, output_cost_per_1k, last_updated (seeded at startup)
   - `embeddings` — id, conversation_id, chunk_text, vector (sqlite-vec column)
-- [ ] `/v1/usage` — cost summary (per conversation, daily, by model comparison)
-- [ ] RAG: embed conversation summaries at close; retrieve top-k at new conversation start
-- [ ] Ollama fallback: if Azure unreachable, auto-pull `gemma3:1b` if not already present
-- [ ] Add `TAVILY_API_KEY` to `.env`
+- [x] `/v1/usage` — cost summary (per conversation, daily, by model comparison)
+- [x] `/v1/pricing` — list all pricing rows; `GET /v1/pricing/{provider}/{model}` fetch one; `POST` upsert (manual rate override)
+- [x] Pricing seed: all 9 deployed models with verified retail rates (gpt-5.3-chat and Mistral-Large-3 estimated; updatable via POST)
+- [x] RAG: embed conversation summaries at close; retrieve top-k at new conversation start; chunks injected as system message prefix on each chat turn
+- [x] Rolling context window: configurable depth (default 20 messages) truncated before sending to model; leading system message always preserved
+- [x] `PATCH /v1/conversations/{id}` — update title and/or model on an existing conversation
+- [x] Ollama fallback: if Azure unreachable, auto-pull `gemma3:1b` if not already present
+- [x] Add `TAVILY_API_KEY` to `.env`
+- [x] Unit + integration test suite — 185 collected, 120 unit, 96% coverage; `./test.sh` / `./test.sh --integration` / `./test.sh --azure`
 
-### M2 — Speech I/O (Week 1–2)
+### M2 — Electron shell + chat UI (Week 2)
+**Goal:** Working desktop app matching code-pad visual style.
+
+- [x] Init Electron project (electron-vite 3, React 19, TypeScript 5, Vite 6)
+- [x] VS Code dark theme CSS variables + Ant Design 5 dark algorithm token overrides
+- [x] Diagnostic Dashboard (first screen):
+  - Provider health panel — Azure + Ollama status, 30s auto-refresh, manual refresh
+  - API tester — preset dropdown, method/path/body editor, live response viewer with status + elapsed time
+- [ ] 3-panel layout:
+  - **Left sidebar** — conversation list (search, star, rename, delete); new conversation button
+  - **Main panel** — chat thread: message bubbles, timestamps, model+provider badge per message, streaming token rendering
+  - **Right panel** (collapsible) — cost dashboard + provider status indicators
+- [ ] Message composer: text input + mic button + image attach + send
+- [ ] Model switcher in header: `gpt-5.3-chat` ↔ `Mistral-Large-3` toggle with per-model cost display (uses `PATCH /v1/conversations/{id}`)
+- [ ] Rolling context window depth setting (default: 20 messages, configurable via `context_window` chat param)
+
+### M3 — Speech I/O (Week 2–3)
 **Goal:** Voice in, voice out via Azure.
 
 - [ ] STT: stream mic audio → Azure `gpt-4o-transcribe` → text
@@ -87,19 +108,6 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [ ] Voice selection passed as parameter (alloy/echo/fable/onyx/nova/shimmer)
 - [ ] Expose audio via IPC: `start-listening`, `stop-listening`, `speak`, `stop-speaking`
 - [ ] Push-to-talk mode (hold key) and continuous mode toggle
-
-### M3 — Electron shell + chat UI (Week 2)
-**Goal:** Working desktop app matching code-pad visual style.
-
-- [ ] Init Electron project mirroring code-pad structure
-- [ ] VS Code dark theme (copy CSS variables from code-pad `src/renderer/styles/index.css`)
-- [ ] 3-panel layout:
-  - **Left sidebar** — conversation list (search, star, rename, delete); new conversation button
-  - **Main panel** — chat thread: message bubbles, timestamps, model+provider badge per message, streaming token rendering
-  - **Right panel** (collapsible) — cost dashboard + provider status indicators
-- [ ] Message composer: text input + mic button + image attach + send
-- [ ] Model switcher in header: `gpt-5.3-chat` ↔ `Mistral-Large-3` toggle with per-model cost display
-- [ ] Rolling context window depth setting (default: 20 messages)
 
 ### M4 — Vision (Week 3)
 **Goal:** Send images, get analysis back.
@@ -144,6 +152,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [ ] System tray icon with quick-ask popup
 - [ ] Global hotkey to open/focus window
 - [ ] Settings modal: provider priority, default model, TTS voice, rolling window depth, theme, cost alert threshold
+- [ ] Bundle `.venv` into packaged app via electron-builder `extraResources`; validate that `sqlite-vec` native extension survives (consider PyInstaller sidecar as alternative if `.so` loading breaks)
 - [ ] electron-builder: Linux AppImage + Windows NSIS + macOS DMG
 - [ ] Auto-update scaffold (electron-updater)
 
@@ -154,39 +163,44 @@ Tavily Search API — free tier (1k calls/month) for development.
 ```
 ~/projects/local-assist/
 ├── src/
-│   ├── renderer/                  # React UI
+│   ├── renderer/                  # React UI (Vite, renderer process)
 │   │   ├── components/
+│   │   │   ├── DiagnosticDashboard.tsx  ✓
 │   │   │   ├── ChatThread.tsx
 │   │   │   ├── MessageComposer.tsx
 │   │   │   ├── ConversationList.tsx
 │   │   │   ├── ModelSwitcher.tsx
 │   │   │   ├── CostDashboard.tsx
-│   │   │   ├── ProviderStatus.tsx
 │   │   │   └── SettingsModal.tsx
-│   │   ├── styles/index.css       # VS Code dark theme (from code-pad)
-│   │   ├── store.ts               # Zustand store
-│   │   └── App.tsx
+│   │   ├── styles/index.css       ✓ VS Code dark theme + Tailwind v4
+│   │   ├── store.ts               ✓ Zustand 5 store
+│   │   ├── electron.d.ts          ✓ window.electronAPI types
+│   │   ├── index.html             ✓
+│   │   ├── main.tsx               ✓ React entry
+│   │   └── App.tsx                ✓ AntD ConfigProvider dark theme
 │   ├── main/
-│   │   ├── index.ts               # Electron main + IPC handlers
-│   │   ├── audio.ts               # TTS/STT bridge
-│   │   ├── sidecar.ts             # Spawn/manage FastAPI process
-│   │   └── google-auth.ts         # OAuth flow
-│   ├── preload/index.ts           # window.electronAPI bridge
-│   ├── backend/                   # FastAPI sidecar (Python)
+│   │   ├── index.ts               ✓ Electron main + IPC + sidecar spawn
+│   │   ├── audio.ts               # TTS/STT bridge (M3)
+│   │   └── google-auth.ts         # OAuth flow (M6)
+│   ├── preload/index.ts           ✓ contextBridge → window.electronAPI
+│   ├── backend/                   # FastAPI sidecar (Python) ✓ M1 complete
 │   │   ├── main.py
-│   │   ├── router.py              # Azure → Ollama fallback
-│   │   ├── rag.py                 # sqlite-vec embeddings + retrieval
-│   │   ├── cost.py                # Pricing table + usage recording
-│   │   ├── database.py            # SQLite schema + queries
+│   │   ├── router.py
+│   │   ├── rag.py
+│   │   ├── cost.py
+│   │   ├── database.py
 │   │   ├── providers/
 │   │   │   ├── azure.py
 │   │   │   └── ollama.py
 │   │   └── tools/
-│   │       ├── search.py          # Tavily
-│   │       └── google.py          # Calendar / Tasks / Drive
-│   └── shared/types.ts
+│   │       ├── search.py          # Tavily (M5)
+│   │       └── google.py          # Calendar / Tasks / Drive (M6)
+│   └── shared/types.ts            ✓ HealthStatus, ApiResponse, etc.
 ├── .env
-├── package.json
-├── vite.config.ts
-└── electron-builder.config.ts
+├── package.json                   ✓
+├── tsconfig.json                  ✓ project references
+├── tsconfig.node.json             ✓ main + preload
+├── tsconfig.web.json              ✓ renderer
+├── electron.vite.config.ts        ✓
+└── electron-builder.config.ts     ✓
 ```

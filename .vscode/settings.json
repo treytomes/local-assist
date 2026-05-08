@@ -8,6 +8,7 @@
 		"cognitiveservices",
 		"dotenv",
 		"eastus",
+		"executemany",
 		"francecentral",
 		"germanywestcentral",
 		"japaneast",
@@ -18,6 +19,8 @@
 		"NSIS",
 		"ollama",
 		"pycache",
+		"pytest",
+		"PYTHONPATH",
 		"Qwen",
 		"skus",
 		"southcentralus",
@@ -28,6 +31,8 @@
 		"uksouth",
 		"VENV",
 		"westeurope",
-		"westus"
+		"westus",
+		"glbl",
+		"Outp"
 	]
 }

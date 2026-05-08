@@ -12,10 +12,15 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from .database import get_connection, init_db
-from .cost import seed_pricing, record_usage, get_conversation_cost, get_daily_costs, get_model_comparison
+from .cost import (
+    seed_pricing, record_usage, get_conversation_cost, get_daily_costs,
+    get_model_comparison, upsert_pricing, get_pricing, list_pricing,
+)
 from . import router as provider_router
 from .rag import embed_conversation, retrieve_context
 from . import database as db
+
+CONTEXT_WINDOW = 20  # default rolling message depth sent to model
 
 
 # --- App lifecycle ---
@@ -62,11 +67,17 @@ class ChatRequest(BaseModel):
     max_tokens: int = Field(default=2048, ge=1, le=16384)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     stream: bool = True
+    context_window: int | None = Field(default=None, ge=1, le=200)
 
 
 class ConversationCreate(BaseModel):
     title: str = "New conversation"
     model: str = "gpt-5.3-chat"
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = None
+    model: str | None = None
 
 
 # --- Health ---
@@ -102,6 +113,18 @@ def get_conv(conv_id: str):
     return {**dict(row), "messages": [dict(m) for m in messages]}
 
 
+@app.patch("/v1/conversations/{conv_id}")
+def patch_conv(conv_id: str, body: ConversationUpdate):
+    row = db.get_conversation(conn(), conv_id)
+    if not row:
+        raise HTTPException(404, "Conversation not found")
+    if body.title is None and body.model is None:
+        return dict(row)
+    with db.transaction(conn()):
+        row = db.update_conversation(conn(), conv_id, body.title, body.model)
+    return dict(row)
+
+
 @app.delete("/v1/conversations/{conv_id}", status_code=204)
 def delete_conv(conv_id: str):
     db.delete_conversation(conn(), conv_id)
@@ -129,11 +152,31 @@ async def chat_completions(body: ChatRequest):
             db.create_conversation(conn(), conv_id, "New conversation", body.model, "azure")
 
     # Persist user messages
-    messages_for_model = [m.model_dump() for m in body.messages]
     last_user = next((m for m in reversed(body.messages) if m.role == "user"), None)
     if last_user:
         with db.transaction(conn()):
             db.insert_message(conn(), str(uuid.uuid4()), conv_id, "user", last_user.content)
+
+    # Apply rolling context window
+    messages_for_model = [m.model_dump() for m in body.messages]
+    window = body.context_window or CONTEXT_WINDOW
+    if len(messages_for_model) > window:
+        # Always preserve a leading system message if present
+        if messages_for_model[0]["role"] == "system":
+            messages_for_model = [messages_for_model[0]] + messages_for_model[-(window - 1):]
+        else:
+            messages_for_model = messages_for_model[-window:]
+
+    # Inject RAG context as a system message prefix when available
+    if last_user:
+        rag_chunks = await retrieve_context(conn(), last_user.content, exclude_conv_id=conv_id)
+        if rag_chunks:
+            rag_text = "\n\n".join(c["chunk_text"] for c in rag_chunks)
+            rag_msg = {"role": "system", "content": f"Relevant context from past conversations:\n{rag_text}"}
+            if messages_for_model and messages_for_model[0]["role"] == "system":
+                messages_for_model.insert(1, rag_msg)
+            else:
+                messages_for_model.insert(0, rag_msg)
 
     provider, resolved_model, stream_iter = await provider_router.stream_chat(
         body.model,
@@ -211,6 +254,31 @@ def usage_summary(days: int = 30):
 @app.get("/v1/usage/{conv_id}")
 def conversation_usage(conv_id: str):
     return get_conversation_cost(conn(), conv_id)
+
+
+# --- Pricing ---
+
+class PricingUpdate(BaseModel):
+    input_cost_per_1k: float = Field(ge=0.0)
+    output_cost_per_1k: float = Field(ge=0.0)
+
+
+@app.get("/v1/pricing")
+def list_pricing_endpoint():
+    return list_pricing(conn())
+
+
+@app.get("/v1/pricing/{provider}/{model:path}")
+def get_pricing_endpoint(provider: str, model: str):
+    row = get_pricing(conn(), provider, model)
+    if not row:
+        raise HTTPException(404, "Pricing not found")
+    return row
+
+
+@app.post("/v1/pricing/{provider}/{model:path}", status_code=200)
+def upsert_pricing_endpoint(provider: str, model: str, body: PricingUpdate):
+    return upsert_pricing(conn(), provider, model, body.input_cost_per_1k, body.output_cost_per_1k)
 
 
 # --- RAG context retrieval ---

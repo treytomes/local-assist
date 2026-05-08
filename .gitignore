@@ -6,7 +6,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+out/
 node_modules/
 *.db
 *.db-shm
 *.db-wal
+.coverage
+

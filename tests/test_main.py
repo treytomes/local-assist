@@ -81,6 +81,35 @@ async def test_get_conversation_not_found(async_client):
     assert resp.status_code == 404
 
 
+async def test_patch_conversation_title(async_client):
+    create_resp = await async_client.post("/v1/conversations", json={"title": "Old"})
+    conv_id = create_resp.json()["id"]
+    resp = await async_client.patch(f"/v1/conversations/{conv_id}", json={"title": "New"})
+    assert resp.status_code == 200
+    assert resp.json()["title"] == "New"
+
+
+async def test_patch_conversation_model(async_client):
+    create_resp = await async_client.post("/v1/conversations", json={"title": "Chat"})
+    conv_id = create_resp.json()["id"]
+    resp = await async_client.patch(f"/v1/conversations/{conv_id}", json={"model": "Mistral-Large-3"})
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "Mistral-Large-3"
+
+
+async def test_patch_conversation_not_found(async_client):
+    resp = await async_client.patch("/v1/conversations/bad-id", json={"title": "x"})
+    assert resp.status_code == 404
+
+
+async def test_patch_conversation_no_fields(async_client):
+    create_resp = await async_client.post("/v1/conversations", json={"title": "Unchanged"})
+    conv_id = create_resp.json()["id"]
+    resp = await async_client.patch(f"/v1/conversations/{conv_id}", json={})
+    assert resp.status_code == 200
+    assert resp.json()["title"] == "Unchanged"
+
+
 async def test_delete_conversation(async_client):
     create_resp = await async_client.post("/v1/conversations", json={"title": "To delete"})
     conv_id = create_resp.json()["id"]
@@ -159,6 +188,91 @@ async def test_chat_no_user_message(async_client):
     assert resp.status_code == 200
 
 
+async def test_chat_rolling_context_window(async_client, monkeypatch):
+    """Messages beyond context_window are truncated before being sent to the model."""
+    captured = {}
+
+    async def capturing_stream(model, messages, max_tokens=2048, temperature=0.7):
+        captured["messages"] = messages
+        return "azure", model, _fake_stream(GOOD_STREAM)
+
+    monkeypatch.setattr(router_mod, "stream_chat", capturing_stream)
+
+    # Send 5 messages but set context_window=2
+    msgs = [{"role": "user", "content": f"msg {i}"} for i in range(5)]
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=[])):
+        await async_client.post("/v1/chat/completions", json={
+            "messages": msgs,
+            "stream": False,
+            "context_window": 2,
+        })
+    assert len(captured["messages"]) == 2
+
+
+async def test_chat_rolling_window_preserves_system_message(async_client, monkeypatch):
+    """A leading system message is always preserved when truncating."""
+    captured = {}
+
+    async def capturing_stream(model, messages, max_tokens=2048, temperature=0.7):
+        captured["messages"] = messages
+        return "azure", model, _fake_stream(GOOD_STREAM)
+
+    monkeypatch.setattr(router_mod, "stream_chat", capturing_stream)
+
+    msgs = [{"role": "system", "content": "sys"}] + [
+        {"role": "user", "content": f"msg {i}"} for i in range(5)
+    ]
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=[])):
+        await async_client.post("/v1/chat/completions", json={
+            "messages": msgs,
+            "stream": False,
+            "context_window": 3,
+        })
+    assert captured["messages"][0]["role"] == "system"
+    assert len(captured["messages"]) == 3
+
+
+async def test_chat_rag_context_injected(async_client, monkeypatch):
+    """RAG chunks are prepended as a system message when retrieve_context returns results."""
+    captured = {}
+
+    async def capturing_stream(model, messages, max_tokens=2048, temperature=0.7):
+        captured["messages"] = messages
+        return "azure", model, _fake_stream(GOOD_STREAM)
+
+    monkeypatch.setattr(router_mod, "stream_chat", capturing_stream)
+
+    rag_chunks = [{"chunk_text": "Relevant fact from the past."}]
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=rag_chunks)):
+        await async_client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "what do you know?"}],
+            "stream": False,
+        })
+
+    system_msgs = [m for m in captured["messages"] if m["role"] == "system"]
+    assert any("Relevant fact" in m["content"] for m in system_msgs)
+
+
+async def test_chat_no_rag_when_no_chunks(async_client, monkeypatch):
+    """No extra system message is injected when retrieve_context returns nothing."""
+    captured = {}
+
+    async def capturing_stream(model, messages, max_tokens=2048, temperature=0.7):
+        captured["messages"] = messages
+        return "azure", model, _fake_stream(GOOD_STREAM)
+
+    monkeypatch.setattr(router_mod, "stream_chat", capturing_stream)
+
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=[])):
+        await async_client.post("/v1/chat/completions", json={
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        })
+    assert not any(
+        "past conversations" in m.get("content", "") for m in captured["messages"]
+    )
+
+
 # --- /v1/chat/completions (streaming SSE) ---
 
 async def test_chat_streaming_yields_sse(async_client):
@@ -223,3 +337,59 @@ async def test_get_context_with_exclude(async_client):
     assert resp.status_code == 200
     call_kwargs = mock_rc.call_args
     assert call_kwargs[0][2] == "abc" or call_kwargs[1].get("exclude_conv_id") == "abc"
+
+
+# --- /v1/pricing ---
+
+async def test_list_pricing(async_client):
+    resp = await async_client.get("/v1/pricing")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert isinstance(rows, list)
+    assert len(rows) > 0
+    models = {r["model"] for r in rows}
+    assert "gpt-5.3-chat" in models
+
+
+async def test_get_pricing_known(async_client):
+    resp = await async_client.get("/v1/pricing/azure/gpt-4o")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "azure"
+    assert data["model"] == "gpt-4o"
+    assert data["input_cost_per_1k"] == 0.0025
+
+
+async def test_get_pricing_not_found(async_client):
+    resp = await async_client.get("/v1/pricing/azure/nonexistent-model")
+    assert resp.status_code == 404
+
+
+async def test_upsert_pricing_creates(async_client):
+    resp = await async_client.post("/v1/pricing/azure/new-test-model", json={
+        "input_cost_per_1k": 0.001,
+        "output_cost_per_1k": 0.005,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["model"] == "new-test-model"
+    assert data["input_cost_per_1k"] == 0.001
+
+
+async def test_upsert_pricing_updates(async_client):
+    await async_client.post("/v1/pricing/azure/gpt-5.3-chat", json={
+        "input_cost_per_1k": 0.099,
+        "output_cost_per_1k": 0.199,
+    })
+    resp = await async_client.get("/v1/pricing/azure/gpt-5.3-chat")
+    assert resp.json()["input_cost_per_1k"] == 0.099
+
+
+async def test_upsert_pricing_model_with_slash(async_client):
+    """Model names containing colons/slashes (e.g. Ollama) should be routable."""
+    resp = await async_client.post("/v1/pricing/ollama/gemma3:1b", json={
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+    })
+    assert resp.status_code == 200
+    assert resp.json()["model"] == "gemma3:1b"

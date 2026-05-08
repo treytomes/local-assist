@@ -8,7 +8,6 @@ from typing import AsyncIterator
 
 from .providers import azure, ollama
 
-AZURE_MODELS  = {"gpt-5.3-chat", "Mistral-Large-3", "gpt-4o"}
 OLLAMA_MODELS = {"gemma3:1b"}
 
 _azure_healthy: bool | None = None

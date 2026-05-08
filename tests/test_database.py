@@ -1,7 +1,7 @@
 import pytest
 from src.backend.database import (
     create_conversation, get_conversation, list_conversations,
-    touch_conversation, delete_conversation,
+    touch_conversation, update_conversation, delete_conversation,
     insert_message, get_messages, transaction,
 )
 
@@ -53,6 +53,37 @@ def test_touch_conversation_with_title(db_conn):
     touch_conversation(db_conn, "c2", title="New title")
     db_conn.commit()
     assert get_conversation(db_conn, "c2")["title"] == "New title"
+
+
+def test_update_conversation_title(db_conn):
+    create_conversation(db_conn, "u1", "Old", "gpt-5.3-chat", "azure")
+    db_conn.commit()
+    row = update_conversation(db_conn, "u1", title="New title")
+    db_conn.commit()
+    assert row["title"] == "New title"
+    assert row["model"] == "gpt-5.3-chat"
+
+
+def test_update_conversation_model(db_conn):
+    create_conversation(db_conn, "u2", "Chat", "gpt-5.3-chat", "azure")
+    db_conn.commit()
+    row = update_conversation(db_conn, "u2", model="Mistral-Large-3")
+    db_conn.commit()
+    assert row["model"] == "Mistral-Large-3"
+    assert row["title"] == "Chat"
+
+
+def test_update_conversation_both(db_conn):
+    create_conversation(db_conn, "u3", "Old", "gpt-5.3-chat", "azure")
+    db_conn.commit()
+    row = update_conversation(db_conn, "u3", title="New", model="Mistral-Large-3")
+    db_conn.commit()
+    assert row["title"] == "New"
+    assert row["model"] == "Mistral-Large-3"
+
+
+def test_update_conversation_missing_returns_none(db_conn):
+    assert update_conversation(db_conn, "nonexistent", title="x") is None
 
 
 def test_delete_conversation(db_conn):

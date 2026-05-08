@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS pricing (
     model                 TEXT NOT NULL,
     input_cost_per_1k     REAL NOT NULL,
     output_cost_per_1k    REAL NOT NULL,
+    last_updated          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     PRIMARY KEY (provider, model)
 );
 
@@ -116,6 +117,14 @@ def touch_conversation(conn: sqlite3.Connection, conv_id: str, title: str | None
             "UPDATE conversations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
             (conv_id,),
         )
+
+
+def update_conversation(conn: sqlite3.Connection, conv_id: str, title: str | None = None, model: str | None = None) -> sqlite3.Row | None:
+    if title is not None:
+        conn.execute("UPDATE conversations SET title = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?", (title, conv_id))
+    if model is not None:
+        conn.execute("UPDATE conversations SET model = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?", (model, conv_id))
+    return get_conversation(conn, conv_id)
 
 
 def delete_conversation(conn: sqlite3.Connection, conv_id: str) -> None:

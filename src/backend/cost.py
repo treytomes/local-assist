@@ -2,12 +2,38 @@ import sqlite3
 from .database import transaction
 
 # Seed data: (provider, model, input_cost_per_1k, output_cost_per_1k)
-# Prices in USD. Azure AI Foundry list prices as of 2025-H1.
+# Prices in USD per 1K tokens.
+#
+# Sources (verified 2026-05-08):
+#   gpt-5.3-chat, Mistral-Large-3  — not in public retail API; set from Azure AI
+#                                    Foundry documentation / portal estimates.
+#                                    Update via POST /v1/pricing when confirmed.
+#   gpt-4o (global)                — Azure Retail Prices API, eastus2, gpt-4o-0806-Inp/Outp-glbl
+#   gpt-4o-mini (global)           — Azure Retail Prices API, eastus2, gpt-4o-mini-0718-Inp/Outp-glbl
+#   text-embedding-3-small (global)— Azure Retail Prices API, eastus2, text-embedding-3-small-glbl
+#   gpt-4o-mini-tts (global, audio out) — Azure Retail Prices API, gpt-4o-mini-tts-aud-out-glbl
+#                                    Input (text) uses gpt-4o-mini-tts-txt-inp-glbl
+#   gpt-4o-transcribe (global)     — audio input: gpt-4o-transcribe-aud-inp-glbl
+#                                    text output:  gpt-4o-transcribe-txt-out-glbl
+#   gpt-realtime (txt, global)     — gpt-4o-rt-txt-1217 Inp/Outp glbl
+#   ollama/gemma3:1b               — free (local inference)
 PRICING_SEED = [
-    ("azure", "gpt-5.3-chat",    0.002,  0.008),
-    ("azure", "Mistral-Large-3", 0.002,  0.006),
-    ("azure", "gpt-4o",          0.005,  0.015),
-    ("ollama", "gemma3:1b",      0.0,    0.0),
+    # Chat models (preview — prices estimated, update via /v1/pricing when confirmed)
+    ("azure", "gpt-5.3-chat",              0.002,   0.008),
+    ("azure", "Mistral-Large-3",           0.002,   0.006),
+    # Chat models (from retail API)
+    ("azure", "gpt-4o",                    0.0025,  0.010),
+    ("azure", "gpt-4o-mini",               0.00015, 0.0006),
+    # Embeddings (from retail API)
+    ("azure", "text-embedding-3-small",    0.00002, 0.0),
+    # TTS: input is text tokens, output is audio tokens (different rates)
+    ("azure", "gpt-4o-mini-tts",           0.0006,  0.012),
+    # STT: input is audio tokens, output is text tokens
+    ("azure", "gpt-4o-transcribe",         0.006,   0.010),
+    # Realtime text (input/output text tokens, global deployment)
+    ("azure", "gpt-realtime",              0.005,   0.020),
+    # Local Ollama — always free
+    ("ollama", "gemma3:1b",                0.0,     0.0),
 ]
 
 
@@ -20,6 +46,43 @@ def seed_pricing(conn: sqlite3.Connection) -> None:
         PRICING_SEED,
     )
     conn.commit()
+
+
+def upsert_pricing(
+    conn: sqlite3.Connection,
+    provider: str,
+    model: str,
+    input_cost_per_1k: float,
+    output_cost_per_1k: float,
+) -> dict:
+    with transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO pricing (provider, model, input_cost_per_1k, output_cost_per_1k, last_updated)
+            VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            ON CONFLICT(provider, model) DO UPDATE SET
+                input_cost_per_1k  = excluded.input_cost_per_1k,
+                output_cost_per_1k = excluded.output_cost_per_1k,
+                last_updated       = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (provider, model, input_cost_per_1k, output_cost_per_1k),
+        )
+    return get_pricing(conn, provider, model)
+
+
+def get_pricing(conn: sqlite3.Connection, provider: str, model: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM pricing WHERE provider = ? AND model = ?",
+        (provider, model),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_pricing(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pricing ORDER BY provider, model"
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_price(conn: sqlite3.Connection, provider: str, model: str) -> tuple[float, float]:
