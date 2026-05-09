@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
-import type { Message, Reaction } from '@shared/types'
+import type { Message, Reaction, WeatherData, WeatherForecastDay } from '@shared/types'
 
 const { Text } = Typography
 
@@ -13,6 +13,119 @@ const EMOJI_PALETTE = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉',
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const WMO_ICON: Record<string, string> = {
+  'Clear sky': '☀️', 'Mainly clear': '🌤️', 'Partly cloudy': '⛅', 'Overcast': '☁️',
+  'Fog': '🌫️', 'Icy fog': '🌫️',
+  'Light drizzle': '🌦️', 'Moderate drizzle': '🌦️', 'Dense drizzle': '🌧️',
+  'Slight rain': '🌧️', 'Moderate rain': '🌧️', 'Heavy rain': '🌧️',
+  'Slight snow': '🌨️', 'Moderate snow': '🌨️', 'Heavy snow': '❄️', 'Snow grains': '❄️',
+  'Slight rain showers': '🌦️', 'Moderate rain showers': '🌧️', 'Violent rain showers': '⛈️',
+  'Slight snow showers': '🌨️', 'Heavy snow showers': '❄️',
+  'Thunderstorm': '⛈️', 'Thunderstorm with slight hail': '⛈️', 'Thunderstorm with heavy hail': '⛈️',
+}
+
+function weatherIcon(condition: string): string {
+  return WMO_ICON[condition] ?? '🌡️'
+}
+
+function WeatherCard({ weather }: { weather: WeatherData }): React.ReactElement {
+  const { location, current, forecast } = weather
+  const locationLabel = location.city
+    ? `${location.city}${location.region ? ', ' + location.region : ''}`
+    : `${location.lat.toFixed(2)}, ${location.lon.toFixed(2)}`
+
+  const maxPrecip = Math.max(...forecast.map(d => d.precipitation_in), 0.01)
+
+  return (
+    <div style={{
+      background: 'var(--vscode-surface)',
+      border: '1px solid var(--vscode-border)',
+      borderRadius: 8,
+      padding: '10px 12px',
+      marginTop: 6,
+      width: '100%',
+      maxWidth: 480,
+    }}>
+      {/* Header — current conditions */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div>
+          <Text style={{ color: 'var(--vscode-text)', fontSize: 12, fontWeight: 600, display: 'block' }}>
+            {locationLabel}
+          </Text>
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+            {current.condition}
+          </Text>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <Text style={{ color: 'var(--vscode-text)', fontSize: 22, fontWeight: 700, lineHeight: 1 }}>
+            {weatherIcon(current.condition)} {Math.round(current.temp_f)}°F
+          </Text>
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, display: 'block' }}>
+            Feels like {Math.round(current.feels_like_f)}°F · {current.humidity_pct}% humidity
+          </Text>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ borderTop: '1px solid var(--vscode-border)', marginBottom: 8 }} />
+
+      {/* 7-day forecast strip */}
+      <div style={{ display: 'flex', gap: 4, overflowX: 'auto' }}>
+        {forecast.map((day: WeatherForecastDay) => {
+          const date = new Date(day.date + 'T12:00:00')
+          const label = date.toLocaleDateString([], { weekday: 'short' })
+          const precipPct = Math.round((day.precipitation_in / maxPrecip) * 100)
+          return (
+            <div key={day.date} style={{
+              flex: '1 0 52px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 2,
+              padding: '4px 2px',
+              borderRadius: 4,
+              minWidth: 52,
+            }}>
+              <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 10 }}>{label}</Text>
+              <span style={{ fontSize: 16, lineHeight: 1.3 }}>{weatherIcon(day.condition)}</span>
+              <Text style={{ color: 'var(--vscode-text)', fontSize: 11, fontWeight: 600 }}>
+                {Math.round(day.temp_high_f)}°
+              </Text>
+              <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 10 }}>
+                {Math.round(day.temp_low_f)}°
+              </Text>
+              {/* Precipitation bar */}
+              <div style={{ width: '100%', height: 3, background: 'var(--vscode-border)', borderRadius: 2, marginTop: 2 }}>
+                {precipPct > 0 && (
+                  <div style={{
+                    width: `${precipPct}%`,
+                    height: '100%',
+                    background: 'var(--vscode-accent)',
+                    borderRadius: 2,
+                    opacity: 0.7,
+                  }} />
+                )}
+              </div>
+              {day.precipitation_in > 0 && (
+                <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 9 }}>
+                  {day.precipitation_in.toFixed(2)}"
+                </Text>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Footer — wind */}
+      <div style={{ borderTop: '1px solid var(--vscode-border)', marginTop: 8, paddingTop: 6 }}>
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 10 }}>
+          Wind {current.wind_speed_mph} mph · Cloud cover {current.cloud_cover_pct}% · Pressure {current.pressure_hpa} hPa
+        </Text>
+      </div>
+    </div>
+  )
 }
 
 // Group reactions by emoji, collecting all reaction objects per emoji
@@ -236,6 +349,13 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
               ))}
             </div>
           </div>
+        ) : null
+      )}
+
+      {/* Weather card */}
+      {!isUser && msg.tools_used?.map((t, ti) =>
+        t.name === 'get_weather' && t.weather ? (
+          <WeatherCard key={ti} weather={t.weather} />
         ) : null
       )}
 

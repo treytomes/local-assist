@@ -588,6 +588,13 @@ async def chat_completions(body: ChatRequest):
                     tool_entry["results"] = parsed.get("results", [])
                 except Exception:
                     tool_entry["results"] = []
+            elif fn["name"] == "get_weather":
+                try:
+                    parsed = _json.loads(result)
+                    if "current" in parsed:
+                        tool_entry["weather"] = parsed
+                except Exception:
+                    pass
             elif fn["name"] == "react_to_message":
                 try:
                     parsed = _json.loads(result)
