@@ -245,7 +245,8 @@ TOOLS: list[dict] = [
             "description": (
                 "Add an emoji reaction to a message. Use this when something in the conversation genuinely "
                 "resonates — a good idea, something funny, something worth acknowledging. Use sparingly and "
-                "naturally. You may react and reply; reactions should never replace a reply."
+                "naturally. A reaction alone (no text) is a valid response when presence is enough — "
+                "when words would diminish rather than add. Trust the moment."
             ),
             "parameters": {
                 "type": "object",

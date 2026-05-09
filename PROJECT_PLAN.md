@@ -168,7 +168,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 
 #### Mara writes reactions (tool)
 - [x] `react_to_message` MCP tool + TOOLS registry entry — args: `message_id`, `emoji`; writes `author='assistant'` row
-- [x] System prompt guidance added: sparingly, react-and-reply is fine, reactions never replace a reply
+- [x] System prompt guidance added: sparingly, a reaction alone is valid when presence is enough
 
 #### UI
 - [x] Reaction `☺` button in the message action bar (next to copy/delete), always visible when not streaming
