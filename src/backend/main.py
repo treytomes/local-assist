@@ -34,6 +34,24 @@ from .tools.memory_tool import (
     get_all_as_text as _memories_as_text,
 )
 from .tools.search import web_search as _web_search, get_usage as _search_get_usage
+from .tools.google import (
+    auth_status as _google_auth_status,
+    start_oauth_flow as _google_start_oauth,
+    revoke_tokens as _google_revoke,
+    list_calendars as _list_calendars,
+    get_calendar_events as _get_calendar_events,
+    create_calendar_event as _create_calendar_event,
+    update_calendar_event as _update_calendar_event,
+    delete_calendar_event as _delete_calendar_event,
+    list_task_lists as _list_task_lists,
+    get_tasks as _get_tasks,
+    create_task as _create_task,
+    complete_task as _complete_task,
+    update_task as _update_task,
+    delete_task as _delete_task,
+    search_drive as _search_drive,
+    get_drive_file as _get_drive_file,
+)
 
 CONTEXT_WINDOW = 20  # default rolling message depth sent to model
 
@@ -258,6 +276,117 @@ TOOLS: list[dict] = [
             },
         },
     },
+    # --- Google Calendar ---
+    {"type": "function", "function": {
+        "name": "list_calendars",
+        "description": "List all Google Calendars for the connected account. Call this first to get calendar IDs before fetching events.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "get_calendar_events",
+        "description": "Fetch events from a Google Calendar within a date range.",
+        "parameters": {"type": "object", "properties": {
+            "calendar_id": {"type": "string", "description": "Calendar ID from list_calendars, or 'primary'."},
+            "time_min": {"type": "string", "description": "RFC 3339 start datetime (default: now)."},
+            "time_max": {"type": "string", "description": "RFC 3339 end datetime (optional)."},
+            "max_results": {"type": "integer", "description": "Max events to return (default 10)."},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "create_calendar_event",
+        "description": "Create a new event on a Google Calendar.",
+        "parameters": {"type": "object", "properties": {
+            "summary": {"type": "string", "description": "Event title."},
+            "start": {"type": "string", "description": "RFC 3339 start datetime."},
+            "end": {"type": "string", "description": "RFC 3339 end datetime."},
+            "calendar_id": {"type": "string", "description": "Calendar ID (default 'primary')."},
+            "description": {"type": "string", "description": "Event description (optional)."},
+            "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee email addresses (optional)."},
+        }, "required": ["summary", "start", "end"]},
+    }},
+    {"type": "function", "function": {
+        "name": "update_calendar_event",
+        "description": "Update fields on an existing Google Calendar event.",
+        "parameters": {"type": "object", "properties": {
+            "event_id": {"type": "string", "description": "Event ID from get_calendar_events."},
+            "calendar_id": {"type": "string", "description": "Calendar ID (default 'primary')."},
+            "summary": {"type": "string"}, "start": {"type": "string"},
+            "end": {"type": "string"}, "description": {"type": "string"},
+        }, "required": ["event_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "delete_calendar_event",
+        "description": "Delete a Google Calendar event.",
+        "parameters": {"type": "object", "properties": {
+            "event_id": {"type": "string", "description": "Event ID from get_calendar_events."},
+            "calendar_id": {"type": "string", "description": "Calendar ID (default 'primary')."},
+        }, "required": ["event_id"]},
+    }},
+    # --- Google Tasks ---
+    {"type": "function", "function": {
+        "name": "list_task_lists",
+        "description": "List all Google Task lists. Call this to find the right task_list_id before operating on tasks.",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "get_tasks",
+        "description": "Get tasks from a Google Tasks list.",
+        "parameters": {"type": "object", "properties": {
+            "task_list_id": {"type": "string", "description": "Task list ID (default '@default' = My Tasks)."},
+            "show_completed": {"type": "boolean", "description": "Include completed tasks (default false)."},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "create_task",
+        "description": "Create a new task in a Google Tasks list.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Task title."},
+            "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
+            "notes": {"type": "string", "description": "Task notes (optional)."},
+            "due": {"type": "string", "description": "Due date in RFC 3339 format (optional)."},
+        }, "required": ["title"]},
+    }},
+    {"type": "function", "function": {
+        "name": "complete_task",
+        "description": "Mark a Google Task as completed.",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string", "description": "Task ID from get_tasks."},
+            "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
+        }, "required": ["task_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "update_task",
+        "description": "Update the title, notes, or due date of a Google Task.",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string", "description": "Task ID from get_tasks."},
+            "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
+            "title": {"type": "string"}, "notes": {"type": "string"}, "due": {"type": "string"},
+        }, "required": ["task_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "delete_task",
+        "description": "Delete a task from a Google Tasks list.",
+        "parameters": {"type": "object", "properties": {
+            "task_id": {"type": "string", "description": "Task ID from get_tasks."},
+            "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
+        }, "required": ["task_id"]},
+    }},
+    # --- Google Drive (read-only) ---
+    {"type": "function", "function": {
+        "name": "search_drive",
+        "description": "Full-text search across Google Drive. Returns file IDs, names, types, and links.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Search query."},
+            "max_results": {"type": "integer", "description": "Max results (default 10)."},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "get_drive_file",
+        "description": "Get metadata and a plain-text preview (up to 2000 chars) of a Google Drive file.",
+        "parameters": {"type": "object", "properties": {
+            "file_id": {"type": "string", "description": "File ID from search_drive."},
+        }, "required": ["file_id"]},
+    }},
 ]
 
 # Synthetic tool definition for get_recent_reactions — injected server-side before every
@@ -377,6 +506,88 @@ async def execute_tool(name: str, arguments: dict) -> str:
         with db.transaction(conn()):
             row = db.add_reaction(conn(), str(_uuid.uuid4()), message_id, "assistant", emoji)
         return json.dumps({"reaction": dict(row)})
+    # --- Google tools ---
+    if name == "list_calendars":
+        return json.dumps(_list_calendars(conn()))
+    if name == "get_calendar_events":
+        return json.dumps(_get_calendar_events(
+            conn(),
+            calendar_id=arguments.get("calendar_id", "primary"),
+            time_min=arguments.get("time_min"),
+            time_max=arguments.get("time_max"),
+            max_results=arguments.get("max_results", 10),
+        ))
+    if name == "create_calendar_event":
+        return json.dumps(_create_calendar_event(
+            conn(),
+            summary=arguments.get("summary", ""),
+            start=arguments.get("start", ""),
+            end=arguments.get("end", ""),
+            calendar_id=arguments.get("calendar_id", "primary"),
+            description=arguments.get("description", ""),
+            attendees=arguments.get("attendees"),
+        ))
+    if name == "update_calendar_event":
+        return json.dumps(_update_calendar_event(
+            conn(),
+            event_id=arguments.get("event_id", ""),
+            calendar_id=arguments.get("calendar_id", "primary"),
+            summary=arguments.get("summary"),
+            start=arguments.get("start"),
+            end=arguments.get("end"),
+            description=arguments.get("description"),
+        ))
+    if name == "delete_calendar_event":
+        return json.dumps(_delete_calendar_event(
+            conn(),
+            event_id=arguments.get("event_id", ""),
+            calendar_id=arguments.get("calendar_id", "primary"),
+        ))
+    if name == "list_task_lists":
+        return json.dumps(_list_task_lists(conn()))
+    if name == "get_tasks":
+        return json.dumps(_get_tasks(
+            conn(),
+            task_list_id=arguments.get("task_list_id", "@default"),
+            show_completed=bool(arguments.get("show_completed", False)),
+        ))
+    if name == "create_task":
+        return json.dumps(_create_task(
+            conn(),
+            title=arguments.get("title", ""),
+            task_list_id=arguments.get("task_list_id", "@default"),
+            notes=arguments.get("notes", ""),
+            due=arguments.get("due"),
+        ))
+    if name == "complete_task":
+        return json.dumps(_complete_task(
+            conn(),
+            task_id=arguments.get("task_id", ""),
+            task_list_id=arguments.get("task_list_id", "@default"),
+        ))
+    if name == "update_task":
+        return json.dumps(_update_task(
+            conn(),
+            task_id=arguments.get("task_id", ""),
+            task_list_id=arguments.get("task_list_id", "@default"),
+            title=arguments.get("title"),
+            notes=arguments.get("notes"),
+            due=arguments.get("due"),
+        ))
+    if name == "delete_task":
+        return json.dumps(_delete_task(
+            conn(),
+            task_id=arguments.get("task_id", ""),
+            task_list_id=arguments.get("task_list_id", "@default"),
+        ))
+    if name == "search_drive":
+        return json.dumps(_search_drive(
+            conn(),
+            query=arguments.get("query", ""),
+            max_results=arguments.get("max_results", 10),
+        ))
+    if name == "get_drive_file":
+        return json.dumps(_get_drive_file(conn(), file_id=arguments.get("file_id", "")))
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
@@ -870,3 +1081,22 @@ def delete_reaction_endpoint(reaction_id: str):
     if not found:
         raise HTTPException(404, "Reaction not found")
     conn().commit()
+
+
+# --- Google OAuth ---
+
+@app.get("/v1/google/auth-status")
+def google_auth_status():
+    return _google_auth_status(conn())
+
+
+@app.post("/v1/google/auth-start")
+async def google_auth_start():
+    if not os.getenv("GOOGLE_CLIENT_ID") or not os.getenv("GOOGLE_CLIENT_SECRET"):
+        raise HTTPException(400, "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env")
+    return await _google_start_oauth(conn())
+
+
+@app.post("/v1/google/revoke", status_code=200)
+def google_revoke():
+    return _google_revoke(conn())

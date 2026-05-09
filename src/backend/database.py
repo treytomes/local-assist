@@ -101,6 +101,16 @@ CREATE TABLE IF NOT EXISTS reactions (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS google_tokens (
+    id            INTEGER PRIMARY KEY CHECK(id = 1),
+    access_token  TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    token_expiry  TEXT NOT NULL,
+    email         TEXT NOT NULL DEFAULT '',
+    scopes        TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_conversation    ON usage(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp       ON usage(timestamp);
@@ -252,3 +262,37 @@ def add_reaction(conn: sqlite3.Connection, reaction_id: str, message_id: str, au
 def delete_reaction(conn: sqlite3.Connection, reaction_id: str) -> bool:
     cursor = conn.execute("DELETE FROM reactions WHERE id = ?", (reaction_id,))
     return cursor.rowcount > 0
+
+
+# --- Google OAuth tokens (single-row table, id always = 1) ---
+
+def get_google_tokens(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM google_tokens WHERE id = 1").fetchone()
+
+
+def upsert_google_tokens(
+    conn: sqlite3.Connection,
+    access_token: str,
+    refresh_token: str,
+    token_expiry: str,
+    email: str,
+    scopes: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO google_tokens (id, access_token, refresh_token, token_expiry, email, scopes, updated_at)
+        VALUES (1, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        ON CONFLICT(id) DO UPDATE SET
+            access_token  = excluded.access_token,
+            refresh_token = CASE WHEN excluded.refresh_token != '' THEN excluded.refresh_token ELSE refresh_token END,
+            token_expiry  = excluded.token_expiry,
+            email         = excluded.email,
+            scopes        = excluded.scopes,
+            updated_at    = excluded.updated_at
+        """,
+        (access_token, refresh_token, token_expiry, email, scopes),
+    )
+
+
+def delete_google_tokens(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM google_tokens WHERE id = 1")

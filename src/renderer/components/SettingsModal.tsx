@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Input, InputNumber, Modal, Slider, Tabs, Typography } from 'antd'
+import React, { useEffect, useState } from 'react'
+import { Button, Input, InputNumber, Modal, Slider, Tabs, Typography } from 'antd'
+import { CheckCircleOutlined, DisconnectOutlined, GoogleOutlined } from '@ant-design/icons'
 import { useAppStore } from '../store'
 import type { ModelParams } from '../store'
 
@@ -76,8 +77,128 @@ function ModelParamEditor({
   )
 }
 
+function GoogleAccountTab({ backendUrl }: { backendUrl: string }): React.ReactElement {
+  const [status, setStatus] = useState<{ connected: boolean; email: string | null } | null>(null)
+  const [connecting, setConnecting] = useState(false)
+  const [revoking, setRevoking] = useState(false)
+  const [pollCount, setPollCount] = useState(0)
+
+  useEffect(() => {
+    fetch(`${backendUrl}/v1/google/auth-status`)
+      .then((r) => r.json())
+      .then(setStatus)
+      .catch(() => setStatus({ connected: false, email: null }))
+  }, [backendUrl, pollCount])
+
+  // Poll for auth completion after initiating flow
+  useEffect(() => {
+    if (!connecting) return
+    const id = setInterval(() => {
+      fetch(`${backendUrl}/v1/google/auth-status`)
+        .then((r) => r.json())
+        .then((s) => {
+          if (s.connected) {
+            setStatus(s)
+            setConnecting(false)
+          }
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => clearInterval(id)
+  }, [connecting, backendUrl])
+
+  async function handleConnect() {
+    setConnecting(true)
+    try {
+      const res = await fetch(`${backendUrl}/v1/google/auth-start`, { method: 'POST' })
+      const data = await res.json()
+      if (data.auth_url) {
+        await window.electronAPI.openExternal(data.auth_url)
+      }
+    } catch {
+      setConnecting(false)
+    }
+  }
+
+  async function handleRevoke() {
+    setRevoking(true)
+    try {
+      await fetch(`${backendUrl}/v1/google/revoke`, { method: 'POST' })
+      setPollCount((n) => n + 1)
+    } finally {
+      setRevoking(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 480 }}>
+      <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>
+        Connect your Google account to give Mara access to Calendar, Tasks, and Drive (read-only).
+        Your tokens are stored locally and never leave this machine.
+      </Text>
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 14px',
+        background: 'var(--vscode-bg)',
+        border: '1px solid var(--vscode-border)',
+        borderRadius: 6,
+      }}>
+        {status?.connected ? (
+          <>
+            <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 16 }} />
+            <div style={{ flex: 1 }}>
+              <Text style={{ color: 'var(--vscode-text)', fontSize: 13, display: 'block' }}>
+                Connected
+              </Text>
+              {status.email && (
+                <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+                  {status.email}
+                </Text>
+              )}
+            </div>
+            <Button
+              size="small"
+              danger
+              icon={<DisconnectOutlined />}
+              loading={revoking}
+              onClick={handleRevoke}
+            >
+              Disconnect
+            </Button>
+          </>
+        ) : (
+          <>
+            <GoogleOutlined style={{ color: 'var(--vscode-text-muted)', fontSize: 16 }} />
+            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 13, flex: 1 }}>
+              {connecting ? 'Waiting for browser sign-in…' : 'Not connected'}
+            </Text>
+            <Button
+              size="small"
+              type="primary"
+              icon={<GoogleOutlined />}
+              loading={connecting}
+              onClick={handleConnect}
+            >
+              Connect
+            </Button>
+          </>
+        )}
+      </div>
+
+      <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+        Requires <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> in your{' '}
+        <code>.env</code> file. See the README for setup instructions.
+      </Text>
+    </div>
+  )
+}
+
 export default function SettingsModal(): React.ReactElement {
   const {
+    backendUrl,
     settingsOpen,
     setSettingsOpen,
     systemPrompt,
@@ -158,6 +279,11 @@ export default function SettingsModal(): React.ReactElement {
                 />
               </div>
             )
+          },
+          {
+            key: 'google',
+            label: 'Google',
+            children: <GoogleAccountTab backendUrl={backendUrl} />
           }
         ]}
       />

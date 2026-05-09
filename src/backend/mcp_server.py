@@ -16,6 +16,21 @@ from .tools.memory_tool import (
     delete_memory as _delete_memory,
 )
 from .tools.search import web_search as _web_search
+from .tools.google import (
+    list_calendars as _list_calendars,
+    get_calendar_events as _get_calendar_events,
+    create_calendar_event as _create_calendar_event,
+    update_calendar_event as _update_calendar_event,
+    delete_calendar_event as _delete_calendar_event,
+    list_task_lists as _list_task_lists,
+    get_tasks as _get_tasks,
+    create_task as _create_task,
+    complete_task as _complete_task,
+    update_task as _update_task,
+    delete_task as _delete_task,
+    search_drive as _search_drive,
+    get_drive_file as _get_drive_file,
+)
 from .database import shared_connection
 
 mcp = FastMCP(
@@ -150,6 +165,157 @@ def delete_memory(memory_id: str) -> dict:
     """
     deleted = _delete_memory(shared_connection(), memory_id)
     return {"deleted": deleted}
+
+
+@mcp.tool()
+def list_calendars() -> dict:
+    """List all Google Calendars. Call this first to get calendar IDs."""
+    return _list_calendars(shared_connection())
+
+
+@mcp.tool()
+def get_calendar_events(
+    calendar_id: str = "primary",
+    time_min: str | None = None,
+    time_max: str | None = None,
+    max_results: int = 10,
+) -> dict:
+    """
+    Fetch events from a Google Calendar.
+
+    Args:
+        calendar_id: Calendar ID from list_calendars, or 'primary'.
+        time_min:    RFC 3339 start datetime (default: now).
+        time_max:    RFC 3339 end datetime (optional).
+        max_results: Max events to return (default 10).
+    """
+    return _get_calendar_events(shared_connection(), calendar_id, time_min, time_max, max_results)
+
+
+@mcp.tool()
+def create_calendar_event(
+    summary: str,
+    start: str,
+    end: str,
+    calendar_id: str = "primary",
+    description: str = "",
+    attendees: list[str] | None = None,
+) -> dict:
+    """
+    Create a new Google Calendar event.
+
+    Args:
+        summary:     Event title.
+        start:       RFC 3339 start datetime.
+        end:         RFC 3339 end datetime.
+        calendar_id: Calendar ID (default 'primary').
+        description: Event description (optional).
+        attendees:   List of attendee email addresses (optional).
+    """
+    return _create_calendar_event(shared_connection(), summary, start, end, calendar_id, description, attendees)
+
+
+@mcp.tool()
+def update_calendar_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+) -> dict:
+    """Update fields on an existing Google Calendar event."""
+    return _update_calendar_event(shared_connection(), event_id, calendar_id, summary, start, end, description)
+
+
+@mcp.tool()
+def delete_calendar_event(event_id: str, calendar_id: str = "primary") -> dict:
+    """Delete a Google Calendar event."""
+    return _delete_calendar_event(shared_connection(), event_id, calendar_id)
+
+
+@mcp.tool()
+def list_task_lists() -> dict:
+    """List all Google Task lists."""
+    return _list_task_lists(shared_connection())
+
+
+@mcp.tool()
+def get_tasks(task_list_id: str = "@default", show_completed: bool = False) -> dict:
+    """
+    Get tasks from a Google Tasks list.
+
+    Args:
+        task_list_id:   Task list ID (default '@default' = My Tasks).
+        show_completed: Include completed tasks (default false).
+    """
+    return _get_tasks(shared_connection(), task_list_id, show_completed)
+
+
+@mcp.tool()
+def create_task(
+    title: str,
+    task_list_id: str = "@default",
+    notes: str = "",
+    due: str | None = None,
+) -> dict:
+    """
+    Create a new Google Task.
+
+    Args:
+        title:        Task title.
+        task_list_id: Task list ID (default '@default').
+        notes:        Task notes (optional).
+        due:          Due date in RFC 3339 format (optional).
+    """
+    return _create_task(shared_connection(), title, task_list_id, notes, due)
+
+
+@mcp.tool()
+def complete_task(task_id: str, task_list_id: str = "@default") -> dict:
+    """Mark a Google Task as completed."""
+    return _complete_task(shared_connection(), task_id, task_list_id)
+
+
+@mcp.tool()
+def update_task(
+    task_id: str,
+    task_list_id: str = "@default",
+    title: str | None = None,
+    notes: str | None = None,
+    due: str | None = None,
+) -> dict:
+    """Update the title, notes, or due date of a Google Task."""
+    return _update_task(shared_connection(), task_id, task_list_id, title, notes, due)
+
+
+@mcp.tool()
+def delete_task(task_id: str, task_list_id: str = "@default") -> dict:
+    """Delete a task from a Google Tasks list."""
+    return _delete_task(shared_connection(), task_id, task_list_id)
+
+
+@mcp.tool()
+def search_drive(query: str, max_results: int = 10) -> dict:
+    """
+    Full-text search across Google Drive.
+
+    Args:
+        query:       Search query.
+        max_results: Max results (default 10).
+    """
+    return _search_drive(shared_connection(), query, max_results)
+
+
+@mcp.tool()
+def get_drive_file(file_id: str) -> dict:
+    """
+    Get metadata and a plain-text preview (up to 2000 chars) of a Google Drive file.
+
+    Args:
+        file_id: File ID from search_drive.
+    """
+    return _get_drive_file(shared_connection(), file_id)
 
 
 @mcp.tool()

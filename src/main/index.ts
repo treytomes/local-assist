@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { spawn, ChildProcess } from 'child_process'
 
@@ -56,6 +56,7 @@ app.whenReady().then(() => {
   }
 
   ipcMain.handle('get-backend-url', () => BACKEND_URL)
+  ipcMain.handle('open-external', (_event, url: string) => shell.openExternal(url))
 
   createWindow()
 

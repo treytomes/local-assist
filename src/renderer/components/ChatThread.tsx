@@ -271,7 +271,24 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
               color="default"
               style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0, color: 'var(--vscode-text-muted)', borderColor: 'var(--vscode-border)' }}
             >
-              {t.name === 'web_search' ? `Searched: ${t.query}` : t.name === 'react_to_message' ? `Reacted ${t.reaction?.emoji ?? ''}` : t.name}
+              {t.name === 'web_search'
+                ? `Searched: ${t.query}`
+                : t.name === 'react_to_message'
+                  ? `Reacted ${t.reaction?.emoji ?? ''}`
+                  : t.name === 'get_calendar_events' ? '📅 Checked calendar'
+                  : t.name === 'create_calendar_event' ? '📅 Created event'
+                  : t.name === 'update_calendar_event' ? '📅 Updated event'
+                  : t.name === 'delete_calendar_event' ? '📅 Deleted event'
+                  : t.name === 'list_calendars' ? '📅 Listed calendars'
+                  : t.name === 'get_tasks' ? '✅ Checked tasks'
+                  : t.name === 'create_task' ? '✅ Created task'
+                  : t.name === 'complete_task' ? '✅ Completed task'
+                  : t.name === 'update_task' ? '✅ Updated task'
+                  : t.name === 'delete_task' ? '✅ Deleted task'
+                  : t.name === 'list_task_lists' ? '✅ Listed task lists'
+                  : t.name === 'search_drive' ? '📁 Searched Drive'
+                  : t.name === 'get_drive_file' ? '📁 Read file'
+                  : t.name}
             </Tag>
           ))}
         </div>

@@ -19,9 +19,12 @@ The backend doubles as an MCP server. Mara can call tools mid-conversation:
 - **get_datetime** — current date, time, and timezone (optional IANA tz override)
 - **get_system_info** — OS, CPU model/usage, RAM/swap, GPU details, system model name
 - **get_location** — IP geolocation; respects a user-stored location override in memory
-- **get_weather** — current conditions + 7-day forecast via Open-Meteo (no API key required)
-- **web_search** — web search via Tavily; results injected into context with "Searched: \<query\>" indicator in thread
-- **store_memory / search_memory / list_memories / pin_memory / delete_memory** — knowledge graph operations
+- **get_weather** — current conditions + 7-day forecast via Open-Meteo; renders an inline weather card in the thread
+- **web_search** — web search via Tavily; results shown as citation cards below the assistant bubble
+- **store_memory / search_memories / list_memories / pin_memory / delete_memory** — knowledge graph operations
+- **list_calendars / get_calendar_events / create_calendar_event / update_calendar_event / delete_calendar_event** — Google Calendar (requires OAuth)
+- **list_task_lists / get_tasks / create_task / complete_task / update_task / delete_task** — Google Tasks (requires OAuth)
+- **search_drive / get_drive_file** — Google Drive read-only search and file preview (requires OAuth)
 
 The available tool list is served dynamically from `GET /v1/tools` — the Context Inspector always reflects the live set without any hardcoded frontend mirror.
 
@@ -125,8 +128,19 @@ AZURE_API_KEY=<your-key>
 ### Optional
 
 ```
-TAVILY_API_KEY=<your-key>   # enables web search
+TAVILY_API_KEY=<your-key>           # enables web search
+GOOGLE_CLIENT_ID=<your-client-id>   # enables Calendar, Tasks, Drive
+GOOGLE_CLIENT_SECRET=<your-secret>
 ```
+
+#### Google OAuth setup
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and create a project.
+2. Enable the **Google Calendar API**, **Tasks API**, and **Google Drive API**.
+3. Create an **OAuth 2.0 Client ID** (Application type: **Web application**).
+4. Add `http://localhost:8080/oauth2callback` as an authorised redirect URI.
+5. Copy the client ID and secret into `.env`.
+6. In Settings → Google tab, click **Connect** to complete the OAuth flow.
 
 ## Running
 
@@ -170,7 +184,6 @@ src/
 
 ## Roadmap
 
-- **M6** — Google account tools (Calendar, Tasks, Drive)
 - **M7** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events
 - **M8** — Voice I/O: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`
 - **M9** — Vision: image attach and screenshot capture
