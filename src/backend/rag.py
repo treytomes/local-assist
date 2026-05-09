@@ -84,7 +84,21 @@ async def retrieve_context(
             msg_id = row["id"].split(":")[0]
             if msg_id in exclude_message_ids:
                 continue
-        results.append(dict(row))
+        entry = dict(row)
+        # Enrich chunk_text with any reactions on this message so Mara sees
+        # the emotional signal when the chunk is injected as RAG context.
+        if ":" in row["id"]:
+            msg_id = row["id"].split(":")[0]
+            reaction_rows = conn.execute(
+                "SELECT author, emoji FROM reactions WHERE message_id = ? ORDER BY created_at ASC",
+                (msg_id,),
+            ).fetchall()
+            if reaction_rows:
+                summary = ", ".join(
+                    f"{r['author']}: {r['emoji']}" for r in reaction_rows
+                )
+                entry["chunk_text"] = entry["chunk_text"] + f"\n[reactions: {summary}]"
+        results.append(entry)
         if len(results) >= TOP_K:
             break
 

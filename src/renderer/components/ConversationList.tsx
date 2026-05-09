@@ -45,6 +45,7 @@ export default function ConversationList({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const renameInputRef = useRef<InputRef>(null)
+  const activeItemRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetch(`${backendUrl}/v1/conversations`)
@@ -59,6 +60,10 @@ export default function ConversationList({
       renameInputRef.current.select?.()
     }
   }, [renamingId])
+
+  useEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [activeConvId])
 
   const filtered = conversations.filter((c) =>
     c.title.toLowerCase().includes(search.toLowerCase())
@@ -164,6 +169,7 @@ export default function ConversationList({
           return (
             <div
               key={conv.id}
+              ref={isActive ? activeItemRef : undefined}
               onClick={() => !isRenaming && onSelectConversation(conv.id)}
               style={{
                 padding: '6px 10px',

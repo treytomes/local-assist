@@ -24,11 +24,15 @@ ERROR_STREAM = [
 
 @pytest.fixture(autouse=True)
 def patch_router(monkeypatch):
-    """Default: Azure healthy, stream returns GOOD_STREAM."""
+    """Default: Azure healthy, stream returns GOOD_STREAM, tool probe returns no tool calls."""
     async def fake_stream_chat(model, messages, max_tokens=2048, temperature=0.7):
         return "azure", model, _fake_stream(GOOD_STREAM)
 
+    async def fake_call_with_tools(model, messages, tools, max_tokens=2048):
+        return "azure", model, {"role": "assistant", "content": None, "tool_calls": []}
+
     monkeypatch.setattr(router_mod, "stream_chat", fake_stream_chat)
+    monkeypatch.setattr(router_mod, "call_with_tools", fake_call_with_tools)
     monkeypatch.setattr(router_mod, "get_health", AsyncMock(return_value={
         "azure": True, "ollama": False, "active_provider": "azure"
     }))
@@ -206,7 +210,8 @@ async def test_chat_rolling_context_window(async_client, monkeypatch):
             "stream": False,
             "context_window": 2,
         })
-    assert len(captured["messages"]) == 2
+    # +2 for the synthetic reactions injection (tool_call + tool_result)
+    assert len(captured["messages"]) == 4
 
 
 async def test_chat_rolling_window_preserves_system_message(async_client, monkeypatch):
@@ -229,7 +234,8 @@ async def test_chat_rolling_window_preserves_system_message(async_client, monkey
             "context_window": 3,
         })
     assert captured["messages"][0]["role"] == "system"
-    assert len(captured["messages"]) == 3
+    # +2 for the synthetic reactions injection (tool_call + tool_result)
+    assert len(captured["messages"]) == 5
 
 
 async def test_chat_rag_context_injected(async_client, monkeypatch):
@@ -269,7 +275,7 @@ async def test_chat_no_rag_when_no_chunks(async_client, monkeypatch):
             "stream": False,
         })
     assert not any(
-        "past conversations" in m.get("content", "") for m in captured["messages"]
+        "past conversations" in (m.get("content") or "") for m in captured["messages"]
     )
 
 
@@ -393,3 +399,106 @@ async def test_upsert_pricing_model_with_slash(async_client):
     })
     assert resp.status_code == 200
     assert resp.json()["model"] == "gemma3:1b"
+
+
+# --- /v1/tools ---
+
+async def test_tools_endpoint_returns_list(async_client):
+    resp = await async_client.get("/v1/tools")
+    assert resp.status_code == 200
+    tools = resp.json()
+    assert isinstance(tools, list)
+    assert len(tools) > 0
+
+
+async def test_tools_endpoint_shape(async_client):
+    resp = await async_client.get("/v1/tools")
+    tools = resp.json()
+    for t in tools:
+        assert "name" in t
+        assert "description" in t
+        assert "parameters" in t
+        assert isinstance(t["parameters"], list)
+        assert "required" in t
+        assert isinstance(t["required"], list)
+
+
+async def test_tools_endpoint_includes_expected_tools(async_client):
+    resp = await async_client.get("/v1/tools")
+    names = {t["name"] for t in resp.json()}
+    assert "web_search" in names
+    assert "get_datetime" in names
+    assert "get_weather" in names
+
+
+# --- /v1/search/usage ---
+
+async def test_search_usage_endpoint_shape(async_client):
+    resp = await async_client.get("/v1/search/usage")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "calls_used" in data
+    assert "limit" in data
+    assert "calls_remaining" in data
+    assert "days_until_reset" in data
+    assert "reset_date" in data
+
+
+async def test_search_usage_starts_at_zero(async_client):
+    resp = await async_client.get("/v1/search/usage")
+    data = resp.json()
+    assert data["calls_used"] == 0
+    assert data["limit"] == 1000
+    assert data["calls_remaining"] == 1000
+
+
+# --- is_retry deduplication ---
+
+async def test_is_retry_does_not_persist_duplicate_user_message(async_client, monkeypatch):
+    """When is_retry=True, the user message should not be inserted again."""
+    create_resp = await async_client.post("/v1/conversations", json={"title": "Retry test"})
+    conv_id = create_resp.json()["id"]
+
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=[])):
+        # First send — persists the user message
+        await async_client.post("/v1/chat/completions", json={
+            "conversation_id": conv_id,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        })
+        conv_after_first = (await async_client.get(f"/v1/conversations/{conv_id}")).json()
+        user_count_after_first = sum(1 for m in conv_after_first["messages"] if m["role"] == "user")
+
+        # Retry — same user message, is_retry=True; must not add another user row
+        await async_client.post("/v1/chat/completions", json={
+            "conversation_id": conv_id,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+            "is_retry": True,
+        })
+        conv_after_retry = (await async_client.get(f"/v1/conversations/{conv_id}")).json()
+        user_count_after_retry = sum(1 for m in conv_after_retry["messages"] if m["role"] == "user")
+
+    assert user_count_after_retry == user_count_after_first
+
+
+async def test_is_retry_false_does_persist_user_message(async_client, monkeypatch):
+    """Sanity check: is_retry=False (default) always persists the user message."""
+    create_resp = await async_client.post("/v1/conversations", json={"title": "Retry false test"})
+    conv_id = create_resp.json()["id"]
+
+    with patch("src.backend.main.retrieve_context", new=AsyncMock(return_value=[])):
+        await async_client.post("/v1/chat/completions", json={
+            "conversation_id": conv_id,
+            "messages": [{"role": "user", "content": "first"}],
+            "stream": False,
+        })
+        await async_client.post("/v1/chat/completions", json={
+            "conversation_id": conv_id,
+            "messages": [{"role": "user", "content": "second"}],
+            "stream": False,
+        })
+        conv = (await async_client.get(f"/v1/conversations/{conv_id}")).json()
+        user_msgs = [m for m in conv["messages"] if m["role"] == "user"]
+
+    assert len(user_msgs) == 2

@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons'
 import { useAppStore } from '../store'
 import type { ApiResponse, HealthStatus, HttpMethod, PresetEndpoint } from '@shared/types'
+import CostDashboard from './CostDashboard'
 
 const { Text, Title } = Typography
 const { TextArea } = Input
@@ -46,14 +47,14 @@ const PRESETS: PresetWithVars[] = [
     label: 'POST /v1/conversations',
     method: 'POST',
     path: '/v1/conversations',
-    body: JSON.stringify({ title: 'Test conversation', model: 'gpt-5.3-chat' }, null, 2)
+    body: JSON.stringify({ title: 'Test conversation', model: 'Mistral-Large-3' }, null, 2)
   },
   { label: 'GET /v1/conversations/{conv_id}', method: 'GET', path: '/v1/conversations/{conv_id}' },
   {
     label: 'PATCH /v1/conversations/{conv_id}',
     method: 'PATCH',
     path: '/v1/conversations/{conv_id}',
-    body: JSON.stringify({ title: 'Renamed', model: 'gpt-5.3-chat' }, null, 2)
+    body: JSON.stringify({ title: 'Renamed', model: 'Mistral-Large-3' }, null, 2)
   },
   { label: 'DELETE /v1/conversations/{conv_id}', method: 'DELETE', path: '/v1/conversations/{conv_id}' },
   { label: 'POST /v1/conversations/{conv_id}/embed', method: 'POST', path: '/v1/conversations/{conv_id}/embed' },
@@ -64,7 +65,7 @@ const PRESETS: PresetWithVars[] = [
     path: '/v1/chat/completions',
     body: JSON.stringify(
       {
-        model: 'gpt-5.3-chat',
+        model: 'Mistral-Large-3',
         messages: [{ role: 'user', content: 'Hello' }],
         max_tokens: 2048,
         temperature: 0.7,
@@ -88,14 +89,14 @@ const PRESETS: PresetWithVars[] = [
     label: 'GET /v1/pricing/{provider}/{model}',
     method: 'GET',
     path: '/v1/pricing/{provider}/{model}',
-    defaultVars: { provider: 'azure', model: 'gpt-5.3-chat' }
+    defaultVars: { provider: 'azure', model: 'Mistral-Large-3' }
   },
   {
     label: 'POST /v1/pricing/{provider}/{model}',
     method: 'POST',
     path: '/v1/pricing/{provider}/{model}',
     body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2),
-    defaultVars: { provider: 'azure', model: 'gpt-5.3-chat' }
+    defaultVars: { provider: 'azure', model: 'Mistral-Large-3' }
   },
   { label: 'GET /v1/search/usage', method: 'GET', path: '/v1/search/usage' },
 ]
@@ -178,6 +179,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
     setBackendUrl
   } = useAppStore()
 
+  const [activeTab, setActiveTab] = useState<'status' | 'cost'>('status')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const autoRefreshRef = useRef(autoRefresh)
   autoRefreshRef.current = autoRefresh
@@ -305,35 +307,8 @@ export default function DiagnosticDashboard(): React.ReactElement {
   const pathVarNames = extractVarNames(path)
   const lastCheckedStr = healthLastChecked ? healthLastChecked.toLocaleTimeString() : '—'
 
-  return (
+  const statusContent = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--vscode-bg)' }}>
-      {/* Header */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '8px 16px',
-          background: 'var(--vscode-surface)',
-          borderBottom: '1px solid var(--vscode-border)',
-          flexShrink: 0
-        }}
-      >
-        <ApiOutlined style={{ color: 'var(--vscode-accent)', fontSize: 16 }} />
-        <Title level={5} style={{ margin: 0, color: 'var(--vscode-text)', fontWeight: 500 }}>
-          local-assist — Diagnostic Dashboard
-        </Title>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
-          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>Backend:</Text>
-          <Input
-            size="small"
-            value={backendUrl}
-            onChange={(e) => setBackendUrl(e.target.value)}
-            style={{ width: 230, fontSize: 12, fontFamily: 'monospace' }}
-          />
-        </div>
-      </div>
-
       {/* Body */}
       <Row style={{ flex: 1, overflow: 'hidden', height: 0 }}>
         {/* Left: Provider Health */}
@@ -640,6 +615,68 @@ export default function DiagnosticDashboard(): React.ReactElement {
           )}
         </Col>
       </Row>
+    </div>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--vscode-bg)' }}>
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 16px',
+          background: 'var(--vscode-surface)',
+          borderBottom: '1px solid var(--vscode-border)',
+          flexShrink: 0
+        }}
+      >
+        <ApiOutlined style={{ color: 'var(--vscode-accent)', fontSize: 16 }} />
+        <Title level={5} style={{ margin: 0, color: 'var(--vscode-text)', fontWeight: 500 }}>
+          local-assist — Diagnostic Dashboard
+        </Title>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>Backend:</Text>
+          <Input
+            size="small"
+            value={backendUrl}
+            onChange={(e) => setBackendUrl(e.target.value)}
+            style={{ width: 230, fontSize: 12, fontFamily: 'monospace' }}
+          />
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: 'flex', gap: 0, background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-border)', flexShrink: 0, padding: '0 16px' }}>
+        {(['status', 'cost'] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              background: 'none',
+              border: 'none',
+              borderBottom: activeTab === tab ? '2px solid var(--vscode-accent)' : '2px solid transparent',
+              color: activeTab === tab ? 'var(--vscode-text)' : 'var(--vscode-text-muted)',
+              cursor: 'pointer',
+              fontSize: 13,
+              padding: '6px 12px',
+              marginBottom: -1,
+              textTransform: 'capitalize',
+            }}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab panes — both mounted, only active one visible */}
+      <div style={{ flex: 1, overflow: 'hidden', display: activeTab === 'status' ? 'flex' : 'none', flexDirection: 'column' }}>
+        {statusContent}
+      </div>
+      <div style={{ flex: 1, overflow: 'hidden', display: activeTab === 'cost' ? 'flex' : 'none', flexDirection: 'column' }}>
+        <CostDashboard />
+      </div>
     </div>
   )
 }

@@ -1,16 +1,88 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Button, Tag, Tooltip, Typography } from 'antd'
 import { CopyOutlined, DeleteOutlined, RedoOutlined, RobotOutlined, SearchOutlined, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
-import type { Message } from '@shared/types'
+import type { Message, Reaction } from '@shared/types'
 
 const { Text } = Typography
 
+const EMOJI_PALETTE = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🤔', '👀', '🙌', '🔥', '✅']
+
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// Group reactions by emoji, collecting all reaction objects per emoji
+function groupReactions(reactions: Reaction[]): { emoji: string; reactions: Reaction[] }[] {
+  const map = new Map<string, Reaction[]>()
+  for (const r of reactions) {
+    const list = map.get(r.emoji) ?? []
+    list.push(r)
+    map.set(r.emoji, list)
+  }
+  return [...map.entries()].map(([emoji, rs]) => ({ emoji, reactions: rs }))
+}
+
+interface EmojiPickerProps {
+  onPick: (emoji: string) => void
+  onClose: () => void
+}
+
+function EmojiPicker({ onPick, onClose }: EmojiPickerProps): React.ReactElement {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [onClose])
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'absolute',
+        bottom: '100%',
+        left: 0,
+        zIndex: 100,
+        background: 'var(--vscode-surface)',
+        border: '1px solid var(--vscode-border)',
+        borderRadius: 6,
+        padding: '6px 8px',
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 4,
+        width: 192,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+        marginBottom: 4,
+      }}
+    >
+      {EMOJI_PALETTE.map((emoji) => (
+        <button
+          key={emoji}
+          onClick={() => { onPick(emoji); onClose() }}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 18,
+            lineHeight: 1,
+            padding: '2px 3px',
+            borderRadius: 4,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--vscode-bg)')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+        >
+          {emoji}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 interface MessageBubbleProps {
@@ -18,11 +90,14 @@ interface MessageBubbleProps {
   isLastUserMsg: boolean
   onRetry?: () => void
   onDelete?: () => void
+  onReact?: (emoji: string) => void
   retryDisabled?: boolean
 }
 
-function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, retryDisabled }: MessageBubbleProps): React.ReactElement {
+function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDisabled }: MessageBubbleProps): React.ReactElement {
   const isUser = msg.role === 'user'
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const groups = groupReactions(msg.reactions ?? [])
 
   return (
     <div
@@ -83,7 +158,7 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, retryDisabled }:
               color="default"
               style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0, color: 'var(--vscode-text-muted)', borderColor: 'var(--vscode-border)' }}
             >
-              {t.name === 'web_search' ? `Searched: ${t.query}` : t.name}
+              {t.name === 'web_search' ? `Searched: ${t.query}` : t.name === 'react_to_message' ? `Reacted ${t.reaction?.emoji ?? ''}` : t.name}
             </Tag>
           ))}
         </div>
@@ -164,6 +239,39 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, retryDisabled }:
         ) : null
       )}
 
+      {/* Reaction pills — only shown when there are existing reactions */}
+      {groups.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {groups.map(({ emoji, reactions: rs }) => {
+            const userReacted = rs.some((r) => r.author === 'user')
+            return (
+              <button
+                key={emoji}
+                onClick={() => onReact?.(emoji)}
+                style={{
+                  background: userReacted ? 'color-mix(in srgb, var(--vscode-accent) 20%, transparent)' : 'var(--vscode-surface)',
+                  border: `1px solid ${userReacted ? 'var(--vscode-accent)' : 'var(--vscode-border)'}`,
+                  borderRadius: 12,
+                  padding: '1px 7px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  fontSize: 13,
+                  lineHeight: '20px',
+                }}
+              >
+                <span>{emoji}</span>
+                {rs.length > 1 && (
+                  <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>{rs.length}</Text>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Timestamp + action buttons */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 10 }}>
           {formatTime(msg.timestamp)}
@@ -191,6 +299,24 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, retryDisabled }:
             />
           </Tooltip>
         )}
+        {/* React button — inline with other actions, picker opens upward */}
+        {onReact && !msg.streaming && (
+          <div style={{ position: 'relative' }}>
+            {pickerOpen && (
+              <EmojiPicker onPick={(e) => { onReact(e); setPickerOpen(false) }} onClose={() => setPickerOpen(false)} />
+            )}
+            <Tooltip title="Add reaction">
+              <Button
+                type="text"
+                size="small"
+                onClick={() => setPickerOpen((v) => !v)}
+                style={{ color: 'var(--vscode-text-muted)', padding: '0 2px', height: 18, fontSize: 11 }}
+              >
+                ☺
+              </Button>
+            </Tooltip>
+          </div>
+        )}
         {onDelete && !msg.streaming && (
           <Tooltip title="Delete message">
             <Button
@@ -212,10 +338,11 @@ interface Props {
   messages: Message[]
   onRetry?: (text: string) => void
   onDeleteMessage?: (msgId: string) => void
+  onReact?: (msgId: string, emoji: string) => void
   retryDisabled?: boolean
 }
 
-export default function ChatThread({ messages, onRetry, onDeleteMessage, retryDisabled }: Props): React.ReactElement {
+export default function ChatThread({ messages, onRetry, onDeleteMessage, onReact, retryDisabled }: Props): React.ReactElement {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -260,6 +387,7 @@ export default function ChatThread({ messages, onRetry, onDeleteMessage, retryDi
           isLastUserMsg={i === lastUserIdx}
           onRetry={onRetry ? () => onRetry(msg.content) : undefined}
           onDelete={onDeleteMessage ? () => onDeleteMessage(msg.id) : undefined}
+          onReact={onReact ? (emoji) => onReact(msg.id, emoji) : undefined}
           retryDisabled={retryDisabled}
         />
       ))}

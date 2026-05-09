@@ -150,3 +150,26 @@ def delete_memory(memory_id: str) -> dict:
     """
     deleted = _delete_memory(shared_connection(), memory_id)
     return {"deleted": deleted}
+
+
+@mcp.tool()
+def react_to_message(message_id: str, emoji: str) -> dict:
+    """
+    Add an emoji reaction to a message in the conversation.
+    Use this when something genuinely resonates — something funny, insightful, or worth
+    acknowledging. Use sparingly and naturally; react-and-reply is fine, but reactions
+    should never replace a reply.
+
+    Args:
+        message_id: The ID of the message to react to.
+        emoji:      A single emoji character (e.g. "👍", "😂", "🔥").
+    """
+    import uuid
+    from .database import add_reaction, transaction
+    conn = shared_connection()
+    msg_row = conn.execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not msg_row:
+        return {"error": f"Message {message_id} not found"}
+    with transaction(conn):
+        row = add_reaction(conn, str(uuid.uuid4()), message_id, "assistant", emoji)
+    return dict(row)

@@ -207,6 +207,21 @@ TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "pin_memory",
+            "description": "Pin an existing memory so it never expires, or unpin it. Use pin=true when you learn something the user would expect you to remember permanently (name, strong preference, standing context). Use pin=false to demote a fact back to TTL-based expiry.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "The ID of the memory to pin or unpin."},
+                    "pinned":    {"type": "boolean", "description": "True to pin (never expires), false to unpin."},
+                },
+                "required": ["memory_id", "pinned"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "web_search",
             "description": (
                 "Search the web for current information using Tavily. Use this when the user asks about "
@@ -223,7 +238,87 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "react_to_message",
+            "description": (
+                "Add an emoji reaction to a message. Use this when something in the conversation genuinely "
+                "resonates — a good idea, something funny, something worth acknowledging. Use sparingly and "
+                "naturally. You may react and reply; reactions should never replace a reply."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "The ID of the message to react to. Must be an 'id' value from the get_recent_reactions context."},
+                    "emoji": {"type": "string", "description": "A single emoji character."},
+                },
+                "required": ["message_id", "emoji"],
+            },
+        },
+    },
 ]
+
+# Synthetic tool definition for get_recent_reactions — injected server-side before every
+# probe, not offered to the model as a callable tool.
+_GET_REACTIONS_TOOL_DEF = {
+    "type": "function",
+    "function": {"name": "get_recent_reactions", "description": "Returns recent messages with their IDs and any emoji reactions. Use the message IDs with react_to_message.", "parameters": {"type": "object", "properties": {}, "required": []}},
+}
+
+
+def _build_reactions_injection(conv_id: str, window: int) -> list[dict] | None:
+    """
+    Inject context about recent messages and their reactions.
+    Returns [assistant tool_call msg, tool result msg], or None if there are no messages.
+    Includes all messages in the window with their IDs so Mara can call react_to_message.
+    """
+    import json as _json
+    # Fetch recent messages to give Mara valid IDs
+    recent_msgs = conn().execute(
+        "SELECT id, role, content FROM messages WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?",
+        (conv_id, window),
+    ).fetchall()
+    if not recent_msgs:
+        return None
+    recent_msgs = list(reversed(recent_msgs))  # chronological order
+
+    # Fetch reactions for those messages
+    reaction_rows = db.get_reactions_for_conversation(conn(), conv_id, limit=window)
+    reactions_by_msg: dict = {}
+    for r in reaction_rows:
+        reactions_by_msg.setdefault(r["message_id"], []).append(
+            {"author": r["author"], "emoji": r["emoji"]}
+        )
+
+    payload = {
+        "recent_messages": [
+            {
+                "id": m["id"],
+                "role": m["role"],
+                "preview": (m["content"] or "")[:80],
+                "reactions": reactions_by_msg.get(m["id"], []),
+            }
+            for m in recent_msgs
+        ]
+    }
+    tool_call_id = "rxn000001"
+    return [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": tool_call_id,
+                "type": "function",
+                "function": {"name": "get_recent_reactions", "arguments": "{}"},
+            }],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": _json.dumps(payload),
+        },
+    ]
 
 
 async def execute_tool(name: str, arguments: dict) -> str:
@@ -260,12 +355,27 @@ async def execute_tool(name: str, arguments: dict) -> str:
     if name == "delete_memory":
         deleted = _delete_memory(conn(), arguments.get("memory_id", ""))
         return json.dumps({"deleted": deleted})
+    if name == "pin_memory":
+        result = _set_pinned(conn(), arguments.get("memory_id", ""), bool(arguments.get("pinned", True)))
+        if result is None:
+            return json.dumps({"error": "Memory not found"})
+        return json.dumps(result)
     if name == "web_search":
         return json.dumps(await _web_search(
             conn(),
             query=arguments.get("query", ""),
             max_results=arguments.get("max_results", 5),
         ))
+    if name == "react_to_message":
+        message_id = arguments.get("message_id", "")
+        emoji = arguments.get("emoji", "")
+        msg_row = conn().execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+        if not msg_row:
+            return json.dumps({"error": f"Message {message_id} not found"})
+        import uuid as _uuid
+        with db.transaction(conn()):
+            row = db.add_reaction(conn(), str(_uuid.uuid4()), message_id, "assistant", emoji)
+        return json.dumps({"reaction": dict(row)})
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
@@ -382,9 +492,10 @@ async def chat_completions(body: ChatRequest):
 
     # Persist user message (skip on retry — already in the database)
     last_user = next((m for m in reversed(body.messages) if m.role == "user"), None)
+    user_msg_id = str(uuid.uuid4())
     if last_user and not body.is_retry:
         with db.transaction(conn()):
-            db.insert_message(conn(), str(uuid.uuid4()), conv_id, "user", last_user.content, model=None)
+            db.insert_message(conn(), user_msg_id, conv_id, "user", last_user.content, model=None)
 
     # Apply rolling context window
     messages_for_model = [m.model_dump() for m in body.messages]
@@ -429,6 +540,14 @@ async def chat_completions(body: ChatRequest):
             else:
                 messages_for_model.insert(0, rag_msg)
 
+    # Inject recent reactions as a synthetic tool call so Mara sees them in context.
+    # Appended at the end so the sequence is: …user → assistant(tool_call) → tool result
+    # which is the valid order Mistral requires before a model turn.
+    if conv_id:
+        reactions_injection = _build_reactions_injection(conv_id, window)
+        if reactions_injection:
+            messages_for_model.extend(reactions_injection)
+
     # --- Tool-use loop ---
     # First call includes tools so the model can request them.
     # We allow one round of tool calls before streaming the final answer.
@@ -469,6 +588,12 @@ async def chat_completions(body: ChatRequest):
                     tool_entry["results"] = parsed.get("results", [])
                 except Exception:
                     tool_entry["results"] = []
+            elif fn["name"] == "react_to_message":
+                try:
+                    parsed = _json.loads(result)
+                    tool_entry["reaction"] = parsed.get("reaction")
+                except Exception:
+                    pass
             tools_used.append(tool_entry)
             messages_for_model.append({
                 "role": "tool",
@@ -541,7 +666,7 @@ async def chat_completions(body: ChatRequest):
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
         # Send done before embedding — embedding calls Azure and must not block or error the response
-        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': cost}, 'tools_used': tools_used})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'user_msg_id': user_msg_id, 'assistant_msg_id': msg_id, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': cost}, 'tools_used': tools_used})}\n\n"
         try:
             await embed_message(conn(), conv_id, msg_id, full_text)
         except Exception:
@@ -694,3 +819,34 @@ def tokenizer_info_endpoint():
 def tokenize_endpoint(body: TokenizeRequest):
     from .tools.tokenizer_tool import tokenize
     return tokenize(body.text)
+
+
+# --- Reactions ---
+
+class ReactionCreate(BaseModel):
+    author: Literal["user", "assistant"]
+    emoji: str
+
+
+@app.get("/v1/reactions/{message_id}")
+def get_reactions_endpoint(message_id: str):
+    rows = db.get_reactions(conn(), message_id)
+    return [dict(r) for r in rows]
+
+
+@app.post("/v1/reactions/{message_id}", status_code=201)
+def add_reaction_endpoint(message_id: str, body: ReactionCreate):
+    msg_row = conn().execute("SELECT id FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if not msg_row:
+        raise HTTPException(404, "Message not found")
+    with db.transaction(conn()):
+        row = db.add_reaction(conn(), str(uuid.uuid4()), message_id, body.author, body.emoji)
+    return dict(row)
+
+
+@app.delete("/v1/reactions/{reaction_id}", status_code=204)
+def delete_reaction_endpoint(reaction_id: str):
+    found = db.delete_reaction(conn(), reaction_id)
+    if not found:
+        raise HTTPException(404, "Reaction not found")
+    conn().commit()

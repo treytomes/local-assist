@@ -30,6 +30,14 @@ export interface Conversation {
   updated_at: string
 }
 
+export interface Reaction {
+  id: string
+  message_id: string
+  author: 'user' | 'assistant'
+  emoji: string
+  created_at: string
+}
+
 export interface Message {
   id: string
   conversation_id: string
@@ -40,10 +48,12 @@ export interface Message {
   timestamp: string
   // frontend-only fields (not persisted)
   streaming?: boolean
+  reactions?: Reaction[]
   tools_used?: Array<{
     name: string
     query?: string
     results?: Array<{ title: string; url: string; content: string; score: number }>
+    reaction?: Reaction
   }>
 }
 

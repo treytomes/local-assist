@@ -93,10 +93,19 @@ CREATE TABLE IF NOT EXISTS search_calls (
     called_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS reactions (
+    id         TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    author     TEXT NOT NULL CHECK(author IN ('user', 'assistant')),
+    emoji      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_conversation    ON usage(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp       ON usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_search_calls_date     ON search_calls(called_at);
+CREATE INDEX IF NOT EXISTS idx_reactions_message     ON reactions(message_id);
 """
 
 
@@ -200,4 +209,46 @@ def get_messages(conn: sqlite3.Connection, conv_id: str) -> list[sqlite3.Row]:
 
 def delete_message(conn: sqlite3.Connection, msg_id: str) -> bool:
     cursor = conn.execute("DELETE FROM messages WHERE id = ?", (msg_id,))
+    return cursor.rowcount > 0
+
+
+# --- Reactions ---
+
+def get_reactions(conn: sqlite3.Connection, message_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM reactions WHERE message_id = ? ORDER BY created_at ASC",
+        (message_id,),
+    ).fetchall()
+
+
+def get_reactions_for_conversation(conn: sqlite3.Connection, conv_id: str, limit: int = 20) -> list[sqlite3.Row]:
+    """Return reactions for the most recent `limit` messages in a conversation."""
+    return conn.execute(
+        """
+        SELECT r.*
+        FROM reactions r
+        JOIN messages m ON m.id = r.message_id
+        WHERE m.conversation_id = ?
+          AND m.id IN (
+              SELECT id FROM messages
+              WHERE conversation_id = ?
+              ORDER BY timestamp DESC
+              LIMIT ?
+          )
+        ORDER BY m.timestamp ASC, r.created_at ASC
+        """,
+        (conv_id, conv_id, limit),
+    ).fetchall()
+
+
+def add_reaction(conn: sqlite3.Connection, reaction_id: str, message_id: str, author: str, emoji: str) -> sqlite3.Row:
+    conn.execute(
+        "INSERT INTO reactions (id, message_id, author, emoji) VALUES (?, ?, ?, ?)",
+        (reaction_id, message_id, author, emoji),
+    )
+    return conn.execute("SELECT * FROM reactions WHERE id = ?", (reaction_id,)).fetchone()
+
+
+def delete_reaction(conn: sqlite3.Connection, reaction_id: str) -> bool:
+    cursor = conn.execute("DELETE FROM reactions WHERE id = ?", (reaction_id,))
     return cursor.rowcount > 0

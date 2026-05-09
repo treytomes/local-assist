@@ -9,7 +9,7 @@ import ConversationList from './ConversationList'
 import ChatThread from './ChatThread'
 import MessageComposer from './MessageComposer'
 import RightPanel from './RightPanel'
-import type { Conversation, Message, ModelId } from '@shared/types'
+import type { Conversation, Message, ModelId, Reaction } from '@shared/types'
 
 const { Text } = Typography
 
@@ -24,6 +24,7 @@ export default function ChatView(): React.ReactElement {
     setMessages,
     appendMessage,
     patchMessage,
+    replaceMessageId,
     setConvUsage,
     rightPanelVisible,
     setRightPanelVisible,
@@ -39,14 +40,24 @@ export default function ChatView(): React.ReactElement {
   const streamingMsgIdRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
-  // Fetch messages when active conversation changes
+  // Fetch messages (+ reactions) when active conversation changes
   useEffect(() => {
     if (!activeConvId) return
     if (messagesByConv[activeConvId]) return // already loaded
     fetch(`${backendUrl}/v1/conversations/${activeConvId}`)
       .then((r) => r.json())
-      .then((data: Conversation & { messages: Message[] }) => {
-        setMessages(activeConvId, data.messages ?? [])
+      .then(async (data: Conversation & { messages: Message[] }) => {
+        const msgs = data.messages ?? []
+        // Load reactions for all messages in parallel
+        const reactionResults = await Promise.all(
+          msgs.map((m) =>
+            fetch(`${backendUrl}/v1/reactions/${m.id}`)
+              .then((r) => r.json() as Promise<Reaction[]>)
+              .catch(() => [] as Reaction[])
+          )
+        )
+        const msgsWithReactions = msgs.map((m, i) => ({ ...m, reactions: reactionResults[i] }))
+        setMessages(activeConvId, msgsWithReactions)
         if (data.model) setSelectedModel(data.model as ModelId)
       })
       .catch(console.error)
@@ -168,15 +179,18 @@ export default function ChatView(): React.ReactElement {
               const evt = JSON.parse(raw) as {
                 type: string
                 content?: string
+                message?: string
                 conversation_id?: string
                 model?: string
                 provider?: string
+                user_msg_id?: string
+                assistant_msg_id?: string
                 usage?: { prompt_tokens: number; completion_tokens: number; cost_usd: number }
-                tools_used?: Array<{ name: string; query?: string }>
+                tools_used?: Array<{ name: string; query?: string; results?: Array<{ title: string; url: string; content: string; score: number }>; reaction?: Reaction }>
               }
               if (evt.type === 'error') {
                 patchMessage(convId!, assistantMsgId, {
-                  content: `[Error: ${(evt as { message?: string }).message ?? 'unknown error'}]`,
+                  content: `[Error: ${evt.message ?? 'unknown error'}]`,
                   streaming: false
                 })
                 return
@@ -184,7 +198,31 @@ export default function ChatView(): React.ReactElement {
                 accumulatedContent += evt.content
                 patchMessage(convId!, assistantMsgId, { content: accumulatedContent })
               } else if (evt.type === 'done' && evt.usage) {
-                patchMessage(convId!, assistantMsgId, {
+                // Sync real server-assigned IDs so reactions can be POSTed to valid message IDs
+                if (evt.user_msg_id && evt.user_msg_id !== userMsg.id) {
+                  replaceMessageId(convId!, userMsg.id, evt.user_msg_id)
+                }
+                const realAssistantId = evt.assistant_msg_id ?? assistantMsgId
+                if (evt.assistant_msg_id && evt.assistant_msg_id !== assistantMsgId) {
+                  replaceMessageId(convId!, assistantMsgId, evt.assistant_msg_id)
+                  streamingMsgIdRef.current = evt.assistant_msg_id
+                }
+                // Apply any assistant reactions that came back via react_to_message tool calls
+                if (evt.tools_used) {
+                  for (const t of evt.tools_used) {
+                    if (t.name === 'react_to_message' && t.reaction) {
+                      const r = t.reaction
+                      const live = useAppStore.getState().messagesByConv[convId!] ?? []
+                      patchMessage(convId!, r.message_id, {
+                        reactions: [
+                          ...(live.find((m) => m.id === r.message_id)?.reactions ?? []),
+                          r,
+                        ]
+                      })
+                    }
+                  }
+                }
+                patchMessage(convId!, realAssistantId, {
                   streaming: false,
                   model: evt.model,
                   provider: evt.provider,
@@ -221,7 +259,8 @@ export default function ChatView(): React.ReactElement {
           })
         }
       } finally {
-        patchMessage(convId!, assistantMsgId, { streaming: false })
+        const finalMsgId = streamingMsgIdRef.current ?? assistantMsgId
+        patchMessage(convId!, finalMsgId, { streaming: false })
         setStreaming(false)
         streamingMsgIdRef.current = null
         abortRef.current = null
@@ -238,10 +277,49 @@ export default function ChatView(): React.ReactElement {
       setMessages,
       appendMessage,
       patchMessage,
+      replaceMessageId,
       messagesByConv,
       setConvUsage,
       updateConversation
     ]
+  )
+
+  const handleReaction = useCallback(
+    async (msgId: string, emoji: string) => {
+      if (!activeConvId) return
+      const msgs = messagesByConv[activeConvId] ?? []
+      const msg = msgs.find((m) => m.id === msgId)
+      if (!msg) return
+      const existing = (msg.reactions ?? []).find((r) => r.author === 'user' && r.emoji === emoji)
+      if (existing) {
+        // Toggle off — optimistic remove
+        patchMessage(activeConvId, msgId, {
+          reactions: (msg.reactions ?? []).filter((r) => r.id !== existing.id)
+        })
+        fetch(`${backendUrl}/v1/reactions/${existing.id}`, { method: 'DELETE' }).catch(console.error)
+      } else {
+        // Add — optimistic insert with temp id
+        const tempId = `temp-${Date.now()}`
+        const optimistic: Reaction = { id: tempId, message_id: msgId, author: 'user', emoji, created_at: new Date().toISOString() }
+        patchMessage(activeConvId, msgId, { reactions: [...(msg.reactions ?? []), optimistic] })
+        fetch(`${backendUrl}/v1/reactions/${msgId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ author: 'user', emoji })
+        })
+          .then((r) => r.json() as Promise<Reaction>)
+          .then((real) => {
+            // Read live state — the optimistic patch has already updated the store
+            const live = useAppStore.getState().messagesByConv[activeConvId] ?? []
+            const current = live.find((m) => m.id === msgId)
+            patchMessage(activeConvId, msgId, {
+              reactions: (current?.reactions ?? []).map((r) => r.id === tempId ? real : r)
+            })
+          })
+          .catch(console.error)
+      }
+    },
+    [activeConvId, backendUrl, messagesByConv, patchMessage]
   )
 
   const handleDeleteMessage = useCallback(
@@ -345,7 +423,7 @@ export default function ChatView(): React.ReactElement {
           />
         </div>
 
-        <ChatThread messages={messages} onRetry={handleRetry} onDeleteMessage={handleDeleteMessage} retryDisabled={streaming} />
+        <ChatThread messages={messages} onRetry={handleRetry} onDeleteMessage={handleDeleteMessage} onReact={handleReaction} retryDisabled={streaming} />
         <MessageComposer
           onSend={handleSend}
           streaming={streaming}

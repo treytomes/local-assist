@@ -53,11 +53,17 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - **Context Inspector** — shows the exact message list sent to the model on the next turn, with context window truncation applied, plus live tool list and connection status
 - **Diagnostic Dashboard** — provider health (Azure + Ollama, 30s auto-refresh), Tavily search quota progress bar with portal baseline offset, full API tester for all backend endpoints
 
+### Message Reactions
+- React to any message with emoji from a fixed 12-emoji palette (👍 ❤️ 😂 😮 😢 😡 🎉 🤔 👀 🙌 🔥 ✅)
+- Mara can react to messages too via the `react_to_message` tool, using any emoji she chooses
+- Reactions are grouped below each bubble with counts; click to toggle your own reaction off
+- Reactions are injected into Mara's context before every turn so she can see and respond to them
+- RAG-retrieved chunks include reaction summaries so past emotional signals carry forward
+
 ### Cost Tracking
 - Token usage and USD cost recorded per message
 - Per-conversation cost summary in the right panel
-- Daily and per-model breakdown via `/v1/usage`
-- Pricing table editable at runtime via `/v1/pricing`
+- **Cost Dashboard** (Diagnostics tab): daily spend chart (7d/30d/90d), per-model breakdown table, spend alert threshold, CSV export
 
 ---
 
@@ -164,9 +170,8 @@ src/
 
 ## Roadmap
 
-- **M4** — Cost dashboard with charts and spend alerts
-- **M5** — Voice I/O: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`
-- **M6** — Vision: image attach and screenshot capture
-- **M7** — Google account tools (Calendar, Tasks, Drive)
-- **M8** — Polish + packaging: toast notifications, system tray, AppImage / NSIS + auto-update
-- **M9** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events
+- **M6** — Google account tools (Calendar, Tasks, Drive)
+- **M7** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events
+- **M8** — Voice I/O: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`
+- **M9** — Vision: image attach and screenshot capture
+- **M10** — Polish + packaging: toast notifications, system tray, AppImage / NSIS + auto-update

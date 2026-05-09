@@ -41,6 +41,7 @@ interface AppState {
   setMessages: (convId: string, msgs: Message[]) => void
   appendMessage: (convId: string, msg: Message) => void
   patchMessage: (convId: string, msgId: string, patch: Partial<Message>) => void
+  replaceMessageId: (convId: string, oldId: string, newId: string) => void
 
   // Per-conversation usage cache
   usageByConv: Record<string, ConvUsage>
@@ -63,6 +64,10 @@ interface AppState {
   // Settings modal visibility
   settingsOpen: boolean
   setSettingsOpen: (v: boolean) => void
+
+  // Cost alert threshold (USD); null = disabled
+  costAlertThreshold: number | null
+  setCostAlertThreshold: (v: number | null) => void
 }
 
 const defaultModelParams: ModelParamsMap = {
@@ -123,6 +128,15 @@ export const useAppStore = create<AppState>()(
             )
           }
         })),
+      replaceMessageId: (convId, oldId, newId) =>
+        set((s) => ({
+          messagesByConv: {
+            ...s.messagesByConv,
+            [convId]: (s.messagesByConv[convId] ?? []).map((m) =>
+              m.id === oldId ? { ...m, id: newId } : m
+            )
+          }
+        })),
 
       usageByConv: {},
       setConvUsage: (convId, usage) =>
@@ -160,7 +174,10 @@ Forgetting:
         set((s) => ({ modelParams: { ...s.modelParams, [model]: params } })),
 
       settingsOpen: false,
-      setSettingsOpen: (v) => set({ settingsOpen: v })
+      setSettingsOpen: (v) => set({ settingsOpen: v }),
+
+      costAlertThreshold: null,
+      setCostAlertThreshold: (v) => set({ costAlertThreshold: v })
     }),
     {
       name: 'local-assist-settings',
@@ -169,7 +186,8 @@ Forgetting:
         systemPrompt: s.systemPrompt,
         modelParams: s.modelParams,
         selectedModel: s.selectedModel,
-        activeConvId: s.activeConvId
+        activeConvId: s.activeConvId,
+        costAlertThreshold: s.costAlertThreshold
       })
     }
   )

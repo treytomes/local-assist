@@ -119,7 +119,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] **Additional MCP tools:**
   - `get_location` — IP geolocation via ip-api.com (checks memory for user override first)
   - `get_weather` — current + 7-day forecast via Open-Meteo (no API key); °F, mph, inches
-  - `store_memory`, `search_memory`, `list_memories`, `pin_memory`, `delete_memory`
+  - `store_memory`, `search_memories`, `list_memories`, `pin_memory`, `delete_memory` — all wired into TOOLS registry and chat tool-use loop
 - [x] **Tokenizer tab** — Tekken v3 tokenizer (131k vocab, tiktoken-based):
   - Debounced live tokenization as you type
   - Color-coded token boxes with hover tooltip (id + raw value)
@@ -142,32 +142,43 @@ Tavily Search API — free tier (1k calls/month) for development.
   - Portal baseline offset (click-to-edit) to reconcile with Tavily web portal count
 - [x] Citation cards: search result sources (title, hostname, URL) rendered as clickable cards below the assistant reply; hover highlights border in accent colour
 
-### M4 — Cost dashboard
+### M4 — Cost dashboard ✅
 **Goal:** Measurable, comparable cost visibility.
 
-- [ ] Model comparison table: cost per 1k tokens, total spent, avg per conversation
-- [ ] Daily/weekly spend chart (Recharts)
-- [ ] Per-provider breakdown
-- [ ] Cost alert: notify if session exceeds configurable threshold ($)
-- [ ] Export usage as CSV
+- [x] Model comparison table: total spent, avg per call, token counts, provider tag — in Cost sub-tab of Diagnostics
+- [x] Daily spend chart (Recharts AreaChart, 7d/30d/90d window selector)
+- [x] Per-provider breakdown (provider tag per row in model table)
+- [x] Cost alert: warning banner when all-time spend exceeds configurable threshold; click-to-edit "Alert at" stat card; persisted to localStorage
+- [x] Export usage as CSV (model breakdown + daily rows, dated filename)
 
-### M5 — Speech I/O
-**Goal:** Voice in, voice out via Azure.
+### M5 — Message reactions ✅
+**Goal:** Users and Mara can react to messages with emoji; reactions feed back into Mara's context and behaviour.
 
-- [ ] STT: stream mic audio → Azure `gpt-4o-transcribe` → text
-- [ ] TTS: assistant reply → Azure `gpt-4o-mini-tts` → audio playback
-- [ ] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings
-- [ ] IPC: `start-listening`, `stop-listening`, `speak`, `stop-speaking`
-- [ ] Push-to-talk mode (hold key) and continuous mode toggle
+#### Storage
+- [x] `reactions` table: `id`, `message_id` (FK → messages), `author` (`user` | `assistant`), `emoji`, `created_at`
+- [x] `GET /v1/reactions/{message_id}` — list reactions for a message
+- [x] `POST /v1/reactions/{message_id}` — add a reaction `{author, emoji}`
+- [x] `DELETE /v1/reactions/{reaction_id}` — remove a reaction (toggle off)
 
-### M6 — Vision
-**Goal:** Send images, get analysis back.
+#### Context injection — ephemeral, tool-shaped
+- [x] `get_recent_reactions` — called server-side before every probe; injected as a synthetic `assistant` tool_call + `tool` result pair; always fires when any messages exist (gives Mara valid message IDs to react to)
+- [x] Injection payload includes message `id`, `role`, 80-char content `preview`, and existing `reactions` per message
+- [x] Reactions roll out of context naturally as messages age past the window
+- [x] RAG-retrieved chunks enriched with reaction summary at read time (e.g. `[reactions: user: 👍, assistant: ❤️]`) — embedding stays clean, enrichment applied on retrieval
 
-- [ ] Image attach: drag-drop or file picker → base64 → multimodal message
-- [ ] Screenshot capture shortcut (Electron `desktopCapturer`)
-- [ ] Image displayed inline in thread
+#### Mara writes reactions (tool)
+- [x] `react_to_message` MCP tool + TOOLS registry entry — args: `message_id`, `emoji`; writes `author='assistant'` row
+- [x] System prompt guidance added: sparingly, react-and-reply is fine, reactions never replace a reply
 
-### M7 — Google account tools
+#### UI
+- [x] Reaction `☺` button in the message action bar (next to copy/delete), always visible when not streaming
+- [x] Fixed palette of 12 emoji (👍 ❤️ 😂 😮 😢 😡 🎉 🤔 👀 🙌 🔥 ✅); click-outside closes; user reactions constrained to palette, Mara may use any emoji
+- [x] Reaction row below bubble: grouped by emoji with count; user-reacted items highlighted; click to toggle off
+- [x] Assistant reactions shown in reaction row (no picker); `react_to_message` tool call shown as "Reacted 🔥" pill
+- [x] Reactions loaded on conversation open; optimistic add with temp ID replaced on server response
+- [x] SSE `done` event carries real server-assigned `user_msg_id` and `assistant_msg_id`; frontend swaps optimistic IDs so reactions POST to valid message IDs immediately
+
+### M6 — Google account tools
 **Goal:** Read/write calendar, tasks, Drive.
 
 - [ ] Google OAuth flow in Electron main process
@@ -175,17 +186,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [ ] `get_calendar_events`, `create_calendar_event`, `get_tasks`, `create_task`, `search_drive`
 - [ ] Tool invocations shown inline ("Checking your calendar…")
 
-### M8 — Polish + packaging
-**Goal:** Installable app.
-
-- [ ] In-app toast notification system (copy confirmation, non-fatal errors, tool completion feedback)
-- [ ] System tray icon with quick-ask popup
-- [ ] Global hotkey to open/focus window
-- [ ] Bundle `.venv` via electron-builder `extraResources`; validate `sqlite-vec` native extension
-- [ ] electron-builder: Linux AppImage + Windows NSIS (macOS out of scope)
-- [ ] Auto-update scaffold (electron-updater)
-
-### M9 — Event-driven notifications
+### M7 — Event-driven notifications
 **Goal:** Mara can be proactively triggered by external events and respond without user prompting.
 
 - [ ] Define event source abstraction: polling interval, webhook listener, or filesystem watch
@@ -194,6 +195,36 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [ ] Notification surface: tray badge + toast; optionally open chat with pre-populated context
 - [ ] Mara response loop: inject event as a system message, allow tool use, surface reply as notification or in thread
 - [ ] User controls: per-source enable/disable, quiet hours, priority threshold
+
+#### Notes for Claude
+
+- Any events or loops that Mara is watching will need to end up on the Diagnostics screen so we can keep an eye on them, and possible delete the ones we don't want.
+
+### M8 — Speech I/O
+**Goal:** Voice in, voice out via Azure.
+
+- [ ] STT: stream mic audio → Azure `gpt-4o-transcribe` → text
+- [ ] TTS: assistant reply → Azure `gpt-4o-mini-tts` → audio playback
+- [ ] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings
+- [ ] IPC: `start-listening`, `stop-listening`, `speak`, `stop-speaking`
+- [ ] Push-to-talk mode (hold key) and continuous mode toggle
+
+### M9 — Vision
+**Goal:** Send images, get analysis back.
+
+- [ ] Image attach: drag-drop or file picker → base64 → multimodal message
+- [ ] Screenshot capture shortcut (Electron `desktopCapturer`)
+- [ ] Image displayed inline in thread
+
+### M10 — Polish + packaging
+**Goal:** Installable app.
+
+- [ ] In-app toast notification system (copy confirmation, non-fatal errors, tool completion feedback)
+- [ ] System tray icon with quick-ask popup
+- [ ] Global hotkey to open/focus window
+- [ ] Bundle `.venv` via electron-builder `extraResources`; validate `sqlite-vec` native extension
+- [ ] electron-builder: Linux AppImage + Windows NSIS (macOS out of scope)
+- [ ] Auto-update scaffold (electron-updater)
 
 ### Future Exploration
 - Custom web search crawler (no Tavily dependency): direct HTTP fetch + HTML extraction; good candidates are sites with structured data or public APIs (Wikipedia, Stack Overflow). Stack Overflow's API could also support writing answers back to the community.
@@ -216,7 +247,8 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   │   ├── ContextInspector.tsx     ✓  debug drawer, live tool list
 │   │   │   ├── MemoryView.tsx           ✓  knowledge graph CRUD
 │   │   │   ├── TokenizerView.tsx        ✓  Tekken tokenizer test UI
-│   │   │   └── DiagnosticDashboard.tsx  ✓  health panel + API tester + search quota
+│   │   │   ├── CostDashboard.tsx        ✓  spend chart, model table, alert threshold, CSV export
+│   │   │   └── DiagnosticDashboard.tsx  ✓  health panel + API tester + search quota + cost sub-tab
 │   │   ├── styles/index.css       ✓ VS Code dark theme + Tailwind v4
 │   │   ├── store.ts               ✓ Zustand 5 store + persist middleware
 │   │   ├── electron.d.ts          ✓ window.electronAPI types
