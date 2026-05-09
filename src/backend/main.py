@@ -498,8 +498,14 @@ async def chat_completions(body: ChatRequest):
         with db.transaction(conn()):
             db.insert_message(conn(), user_msg_id, conv_id, "user", last_user.content, model=None)
 
-    # Apply rolling context window
-    messages_for_model = [m.model_dump() for m in body.messages]
+    # Apply rolling context window.
+    # Strip empty-content assistant messages with no tool_calls — these can appear
+    # in history when Mara reacted-only and the DB row was persisted before the fix.
+    # Mistral rejects such messages with "must have either content or tool_calls".
+    messages_for_model = [
+        m.model_dump() for m in body.messages
+        if not (m.role == "assistant" and not (m.content or "").strip() and not getattr(m, "tool_calls", None))
+    ]
     window = body.context_window or CONTEXT_WINDOW
     if len(messages_for_model) > window:
         # Always preserve a leading system message if present
