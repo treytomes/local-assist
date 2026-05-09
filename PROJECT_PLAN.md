@@ -179,12 +179,46 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] SSE `done` event carries real server-assigned `user_msg_id` and `assistant_msg_id`; frontend swaps optimistic IDs so reactions POST to valid message IDs immediately
 
 ### M6 — Google account tools
-**Goal:** Read/write calendar, tasks, Drive.
+**Goal:** Mara can read and write the user's calendar and tasks, and search Drive for files.
 
-- [ ] Google OAuth flow in Electron main process
-- [ ] Token stored via Electron `safeStorage`
-- [ ] `get_calendar_events`, `create_calendar_event`, `get_tasks`, `create_task`, `search_drive`
-- [ ] Tool invocations shown inline ("Checking your calendar…")
+#### Scope decisions
+- Calendar: full read/write (create, update, delete events)
+- Tasks: full read/write (create, complete, update, delete); default list is "My Tasks" but all lists discoverable
+- Drive: **read-only** — search + fetch file metadata and plain-text content preview; writing back to Drive is out of scope for this milestone
+
+#### Auth
+- [ ] Google OAuth 2.0 flow in Electron main process (`google-auth.ts`) — opens system browser, listens on loopback redirect
+- [ ] Tokens (access + refresh) stored via Electron `safeStorage` (encrypted at rest)
+- [ ] Automatic access token refresh using stored refresh token (tokens expire after 1 hour)
+- [ ] Sign-out / revoke flow — clears stored tokens; accessible from Settings
+- [ ] Auth state indicator in Settings: "Connected as user@gmail.com" or "Not connected"
+- [ ] IPC channel: `google-auth-status`, `google-auth-start`, `google-auth-signout`
+
+#### Calendar tools
+- [ ] `list_calendars` — enumerate all calendars (id, name, primary flag); lets Mara avoid hardcoding "primary"
+- [ ] `get_calendar_events` — fetch events in a date range; args: `calendar_id` (default "primary"), `time_min`, `time_max`, `max_results`
+- [ ] `create_calendar_event` — args: `calendar_id`, `summary`, `start`, `end`, `description?`, `attendees?`
+- [ ] `update_calendar_event` — args: `calendar_id`, `event_id`, fields to patch
+- [ ] `delete_calendar_event` — args: `calendar_id`, `event_id`
+
+#### Tasks tools
+- [ ] `list_task_lists` — enumerate all task lists (id, title); Mara uses this to find the right list
+- [ ] `get_tasks` — fetch tasks from a list; args: `task_list_id` (default "My Tasks"), `show_completed?`
+- [ ] `create_task` — args: `task_list_id`, `title`, `notes?`, `due?`
+- [ ] `complete_task` — mark a task done; args: `task_list_id`, `task_id`
+- [ ] `update_task` — args: `task_list_id`, `task_id`, fields to patch (title, notes, due)
+- [ ] `delete_task` — args: `task_list_id`, `task_id`
+
+#### Drive tools (read-only)
+- [ ] `search_drive` — full-text search across Drive; args: `query`, `max_results`; returns file id, name, mimeType, webViewLink
+- [ ] `get_drive_file` — fetch file metadata + plain-text content preview (first 2000 chars for Docs/Sheets exported as text); args: `file_id`
+
+#### Wiring
+- [ ] All 11 tools registered in TOOLS registry (`main.py`) and `execute_tool` handler
+- [ ] All 11 tools defined as MCP tools in `mcp_server.py`
+- [ ] `tools/google.py` — Google API client wrapper using `google-api-python-client` + `google-auth-oauthlib`
+- [ ] Tool invocations shown inline in the thread (calendar/task tool calls display relevant fields: event title + date, task title, file name)
+- [ ] Google tools listed in Context Inspector via `/v1/tools` (automatic if wired correctly)
 
 ### M7 — Event-driven notifications
 **Goal:** Mara can be proactively triggered by external events and respond without user prompting.
