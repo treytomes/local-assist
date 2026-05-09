@@ -666,7 +666,13 @@ async def chat_completions(body: ChatRequest):
                 yield f"data: {json.dumps({'type': 'error', 'message': chunk['message']})}\n\n"
                 return
 
-        # Persist assistant reply + usage after stream ends
+        # Persist assistant reply + usage after stream ends.
+        # If the model produced no text (e.g. only called tools like react_to_message),
+        # skip persisting an empty message and signal the frontend to drop the placeholder.
+        if not full_text.strip():
+            yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'user_msg_id': user_msg_id, 'assistant_msg_id': None, 'empty': True, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': 0.0}, 'tools_used': tools_used})}\n\n"
+            return
+
         msg_id = str(uuid.uuid4())
         with db.transaction(conn()):
             db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)

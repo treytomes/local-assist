@@ -184,7 +184,8 @@ export default function ChatView(): React.ReactElement {
                 model?: string
                 provider?: string
                 user_msg_id?: string
-                assistant_msg_id?: string
+                assistant_msg_id?: string | null
+                empty?: boolean
                 usage?: { prompt_tokens: number; completion_tokens: number; cost_usd: number }
                 tools_used?: Array<{ name: string; query?: string; results?: Array<{ title: string; url: string; content: string; score: number }>; reaction?: Reaction }>
               }
@@ -198,14 +199,9 @@ export default function ChatView(): React.ReactElement {
                 accumulatedContent += evt.content
                 patchMessage(convId!, assistantMsgId, { content: accumulatedContent })
               } else if (evt.type === 'done' && evt.usage) {
-                // Sync real server-assigned IDs so reactions can be POSTed to valid message IDs
+                // Sync real user message ID regardless of whether assistant produced text
                 if (evt.user_msg_id && evt.user_msg_id !== userMsg.id) {
                   replaceMessageId(convId!, userMsg.id, evt.user_msg_id)
-                }
-                const realAssistantId = evt.assistant_msg_id ?? assistantMsgId
-                if (evt.assistant_msg_id && evt.assistant_msg_id !== assistantMsgId) {
-                  replaceMessageId(convId!, assistantMsgId, evt.assistant_msg_id)
-                  streamingMsgIdRef.current = evt.assistant_msg_id
                 }
                 // Apply any assistant reactions that came back via react_to_message tool calls
                 if (evt.tools_used) {
@@ -221,6 +217,17 @@ export default function ChatView(): React.ReactElement {
                       })
                     }
                   }
+                }
+                // Empty turn — model only reacted, produced no text; drop the placeholder bubble
+                if (evt.empty) {
+                  const live = useAppStore.getState().messagesByConv[convId!] ?? []
+                  setMessages(convId!, live.filter((m) => m.id !== assistantMsgId))
+                  return
+                }
+                const realAssistantId = evt.assistant_msg_id ?? assistantMsgId
+                if (evt.assistant_msg_id && evt.assistant_msg_id !== assistantMsgId) {
+                  replaceMessageId(convId!, assistantMsgId, evt.assistant_msg_id)
+                  streamingMsgIdRef.current = evt.assistant_msg_id
                 }
                 patchMessage(convId!, realAssistantId, {
                   streaming: false,
