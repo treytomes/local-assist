@@ -5,11 +5,14 @@ import {
   Col,
   Divider,
   Input,
+  InputNumber,
+  Progress,
   Row,
   Select,
   Space,
   Switch,
   Tag,
+  Tooltip,
   Typography
 } from 'antd'
 import {
@@ -94,6 +97,7 @@ const PRESETS: PresetWithVars[] = [
     body: JSON.stringify({ input_cost_per_1k: 0.002, output_cost_per_1k: 0.008 }, null, 2),
     defaultVars: { provider: 'azure', model: 'gpt-5.3-chat' }
   },
+  { label: 'GET /v1/search/usage', method: 'GET', path: '/v1/search/usage' },
 ]
 
 const PRESET_GROUPS: PresetGroup[] = [
@@ -116,6 +120,10 @@ const PRESET_GROUPS: PresetGroup[] = [
   {
     label: 'Pricing',
     options: [11, 12, 13].map((i) => ({ ...PRESETS[i], value: i }))
+  },
+  {
+    label: 'Search',
+    options: [14].map((i) => ({ ...PRESETS[i], value: i }))
   },
 ]
 
@@ -174,6 +182,16 @@ export default function DiagnosticDashboard(): React.ReactElement {
   const autoRefreshRef = useRef(autoRefresh)
   autoRefreshRef.current = autoRefresh
 
+  const [searchUsage, setSearchUsage] = useState<{
+    calls_used: number
+    limit: number
+    calls_remaining: number
+    days_until_reset: number
+    reset_date: string
+  } | null>(null)
+  const [searchBaseline, setSearchBaseline] = useState<number>(0)
+  const [editingBaseline, setEditingBaseline] = useState(false)
+
   const [selectedPresetIdx, setSelectedPresetIdx] = useState(0)
   const [method, setMethod] = useState<HttpMethod>('GET')
   const [path, setPath] = useState('/v1/health')
@@ -197,13 +215,26 @@ export default function DiagnosticDashboard(): React.ReactElement {
     }
   }, [backendUrl, setHealth, setHealthLoading, setHealthLastChecked])
 
+  const fetchSearchUsage = useCallback(async () => {
+    try {
+      const res = await fetch(`${backendUrl}/v1/search/usage`)
+      setSearchUsage(await res.json())
+    } catch {
+      // non-fatal
+    }
+  }, [backendUrl])
+
   useEffect(() => {
     fetchHealth()
+    fetchSearchUsage()
     const id = setInterval(() => {
-      if (autoRefreshRef.current) fetchHealth()
+      if (autoRefreshRef.current) {
+        fetchHealth()
+        fetchSearchUsage()
+      }
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchHealth])
+  }, [fetchHealth, fetchSearchUsage])
 
   function extractVarNames(p: string): string[] {
     return [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
@@ -348,12 +379,73 @@ export default function DiagnosticDashboard(): React.ReactElement {
             </Text>
           )}
 
+          {searchUsage && (() => {
+            const adjusted = Math.min(searchUsage.calls_used + searchBaseline, searchUsage.limit)
+            const pct = Math.round((adjusted / searchUsage.limit) * 100)
+            return (
+              <>
+                <Divider style={{ borderColor: 'var(--vscode-border)', margin: '12px 0 8px' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                  <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+                    Tavily Search Quota
+                  </Text>
+                  <Tooltip title="Only calls made through this app are tracked locally. Set a baseline to account for calls made elsewhere.">
+                    <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 10, cursor: 'default' }}>ⓘ</Text>
+                  </Tooltip>
+                </div>
+                <Progress
+                  percent={pct}
+                  size="small"
+                  strokeColor={
+                    pct >= 90 ? 'var(--vscode-error)'
+                    : pct >= 70 ? 'var(--vscode-warning)'
+                    : 'var(--vscode-accent)'
+                  }
+                  trailColor="var(--vscode-border)"
+                  format={() => (
+                    <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+                      {adjusted}/{searchUsage.limit}
+                    </Text>
+                  )}
+                />
+                <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, marginTop: 4, display: 'block' }}>
+                  Resets in {searchUsage.days_until_reset}d · {searchUsage.reset_date}
+                </Text>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                  <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, flexShrink: 0 }}>
+                    Portal baseline:
+                  </Text>
+                  {editingBaseline ? (
+                    <InputNumber
+                      size="small"
+                      min={0}
+                      max={searchUsage.limit}
+                      value={searchBaseline}
+                      onChange={(v) => setSearchBaseline(v ?? 0)}
+                      onBlur={() => setEditingBaseline(false)}
+                      onPressEnter={() => setEditingBaseline(false)}
+                      autoFocus
+                      style={{ width: 72, fontSize: 11 }}
+                    />
+                  ) : (
+                    <Text
+                      onClick={() => setEditingBaseline(true)}
+                      style={{ color: 'var(--vscode-accent)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline dotted' }}
+                    >
+                      {searchBaseline} calls
+                    </Text>
+                  )}
+                </div>
+              </>
+            )
+          })()}
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
             <Button
               size="small"
               icon={<ReloadOutlined />}
               loading={healthLoading}
-              onClick={fetchHealth}
+              onClick={() => { fetchHealth(); fetchSearchUsage() }}
               style={{ fontSize: 12 }}
             >
               Refresh

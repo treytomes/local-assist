@@ -38,7 +38,7 @@ def _deployment_url(deployment: str, path: str) -> str:
 
 async def health_check() -> bool:
     # A lightweight probe: HEAD against the chat endpoint of the primary model.
-    url = _deployment_url("gpt-5.3-chat", "chat/completions")
+    url = _deployment_url("Mistral-Large-3", "chat/completions")
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             # POST with minimal payload; any non-5xx/network response means reachable.
@@ -108,7 +108,13 @@ async def stream_chat(
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
-                    # usage chunk (last chunk before [DONE])
+                    # Process content before usage — Mistral often puts the last
+                    # token and usage in the same chunk; the old `continue` dropped it.
+                    for choice in chunk.get("choices", []):
+                        delta = choice.get("delta", {})
+                        text = delta.get("content")
+                        if text:
+                            yield {"type": "delta", "content": text}
                     if chunk.get("usage"):
                         u = chunk["usage"]
                         yield {
@@ -116,12 +122,6 @@ async def stream_chat(
                             "prompt_tokens": u.get("prompt_tokens", 0),
                             "completion_tokens": u.get("completion_tokens", 0),
                         }
-                        continue
-                    for choice in chunk.get("choices", []):
-                        delta = choice.get("delta", {})
-                        text = delta.get("content")
-                        if text:
-                            yield {"type": "delta", "content": text}
         except httpx.RequestError as exc:
             yield {"type": "error", "message": str(exc)}
 

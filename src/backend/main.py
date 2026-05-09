@@ -11,17 +11,29 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-from .database import get_connection, init_db
+from .database import get_connection, init_db, set_shared_connection
 from .cost import (
     seed_pricing, record_usage, get_conversation_cost, get_daily_costs,
     get_model_comparison, upsert_pricing, get_pricing, list_pricing,
 )
 from . import router as provider_router
-from .rag import embed_conversation, retrieve_context
+from .rag import embed_conversation, embed_message, retrieve_context
 from . import database as db
 from .mcp_server import mcp
 from .tools.datetime_tool import get_datetime as tool_get_datetime
 from .tools.system_info_tool import get_system_info as tool_get_system_info
+from .tools.location_tool import get_location as tool_get_location
+from .tools.weather_tool import get_weather as tool_get_weather
+from .tools.memory_tool import (
+    store_memory as _store_memory,
+    embed_memory as _embed_memory,
+    search_memories as _search_memories,
+    list_memories as _list_memories,
+    set_pinned as _set_pinned,
+    delete_memory as _delete_memory,
+    get_all_as_text as _memories_as_text,
+)
+from .tools.search import web_search as _web_search, get_usage as _search_get_usage
 
 CONTEXT_WINDOW = 20  # default rolling message depth sent to model
 
@@ -37,6 +49,7 @@ async def lifespan(app: FastAPI):
     _conn = get_connection()
     init_db(_conn)
     seed_pricing(_conn)
+    set_shared_connection(_conn)
     yield
     if _conn:
         _conn.close()
@@ -92,18 +105,167 @@ TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_location",
+            "description": (
+                "Returns the current location (city, region, country, lat/lon, timezone) via IP geolocation. "
+                "Checks memory for a user-configured override first. "
+                "Use this when the user asks where they are, or as a prerequisite for get_weather."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": (
+                "Returns current weather conditions and a 7-day forecast using Open-Meteo. "
+                "Resolves location automatically if lat/lon are omitted. "
+                "Temperatures in °F, wind in mph, precipitation in inches."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lat": {"type": "number", "description": "Latitude. Omit to auto-detect from location."},
+                    "lon": {"type": "number", "description": "Longitude. Omit to auto-detect from location."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "store_memory",
+            "description": (
+                "Store a fact as a subject/predicate/object triple. Overwrites any existing memory with "
+                "the same subject+predicate pair. By default facts decay after 24 hours — set pinned=true "
+                "for facts that should persist indefinitely (e.g. the user's name, core preferences). "
+                "Use ttl_hours to control decay: shorter for ephemeral context, longer for ongoing projects. "
+                "Write the object as a full sentence when context matters — include the why and the texture, "
+                "not just the bare fact. 'dislikes mornings, finds them disorienting — prefers to ease in "
+                "slowly before anything demanding' is more useful than 'hates mornings'. "
+                "Examples: subject='user' predicate='prefers' object='bullet-point answers, finds prose responses slow to scan' pinned=true; "
+                "subject='session' predicate='focus' object='debugging the auth flow — started after noticing 401s in prod logs' ttl_hours=4."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject":   {"type": "string", "description": "Entity the fact is about (e.g. 'user', 'project', 'session')."},
+                    "predicate": {"type": "string", "description": "Relationship or property (e.g. 'prefers', 'is working on', 'name')."},
+                    "object":    {"type": "string", "description": "Value of the fact."},
+                    "ttl_hours": {"type": "number", "description": "Hours until this memory expires. Default 24. Ignored when pinned=true."},
+                    "pinned":    {"type": "boolean", "description": "If true, this memory never expires. Use for permanent facts like the user's name or strong preferences."},
+                },
+                "required": ["subject", "predicate", "object"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memories",
+            "description": "Search stored memories by keyword. Matches against subject, predicate, and object fields.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keyword or phrase to search for."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_memories",
+            "description": "Return all stored memories. Use when you want a full picture of what you know.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a stored memory by its ID. Use when a fact is no longer true or the user asks you to forget something.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "The ID of the memory to delete."},
+                },
+                "required": ["memory_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information using Tavily. Use this when the user asks about "
+                "recent events, live data, or anything your training data may not cover. "
+                "Returns a list of relevant results with title, URL, and a content snippet."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query."},
+                    "max_results": {"type": "integer", "description": "Number of results to return (1–10, default 5)."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
-def execute_tool(name: str, arguments: dict) -> str:
+async def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool by name and return the result as a JSON string."""
     import json
     if name == "get_datetime":
-        result = tool_get_datetime(arguments.get("timezone"))
-        return json.dumps(result)
+        return json.dumps(tool_get_datetime(arguments.get("timezone")))
     if name == "get_system_info":
-        result = tool_get_system_info()
+        return json.dumps(tool_get_system_info())
+    if name == "get_location":
+        return json.dumps(await tool_get_location(conn()))
+    if name == "get_weather":
+        return json.dumps(await tool_get_weather(
+            lat=arguments.get("lat"),
+            lon=arguments.get("lon"),
+            conn=conn(),
+        ))
+    if name == "store_memory":
+        result = _store_memory(
+            conn(),
+            subject=arguments.get("subject", ""),
+            predicate=arguments.get("predicate", ""),
+            object_=arguments.get("object", ""),
+            source_conv_id=arguments.get("source_conv_id"),
+            ttl_hours=arguments.get("ttl_hours", 24.0),
+            pinned=bool(arguments.get("pinned", False)),
+        )
+        await _embed_memory(conn(), result["id"], result["subject"], result["predicate"], result["object"])
         return json.dumps(result)
+    if name == "search_memories":
+        return json.dumps(await _search_memories(conn(), arguments.get("query", "")))
+    if name == "list_memories":
+        return json.dumps(_list_memories(conn()))
+    if name == "delete_memory":
+        deleted = _delete_memory(conn(), arguments.get("memory_id", ""))
+        return json.dumps({"deleted": deleted})
+    if name == "web_search":
+        return json.dumps(await _web_search(
+            conn(),
+            query=arguments.get("query", ""),
+            max_results=arguments.get("max_results", 5),
+        ))
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
@@ -120,7 +282,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: str | None = None
-    model: str = "gpt-5.3-chat"
+    model: str = "Mistral-Large-3"
     messages: list[Message]
     max_tokens: int = Field(default=2048, ge=1, le=16384)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
@@ -131,7 +293,7 @@ class ChatRequest(BaseModel):
 
 class ConversationCreate(BaseModel):
     title: str = "New conversation"
-    model: str = "gpt-5.3-chat"
+    model: str = "Mistral-Large-3"
 
 
 class ConversationUpdate(BaseModel):
@@ -234,12 +396,34 @@ async def chat_completions(body: ChatRequest):
         else:
             messages_for_model = messages_for_model[-window:]
 
-    # Inject RAG context as a system message prefix when available
+    # Collect message IDs currently in the window so RAG skips what's already present.
+    # The frontend sends full content but not IDs, so we match by content against DB rows.
+    windowed_content = {m["content"] for m in messages_for_model if m.get("role") == "assistant"}
+    in_window_msg_ids: set[str] = set()
+    if windowed_content:
+        db_rows = conn().execute(
+            "SELECT id, content FROM messages WHERE conversation_id = ? AND role = 'assistant'",
+            (conv_id,),
+        ).fetchall()
+        for row in db_rows:
+            if row["content"] in windowed_content:
+                in_window_msg_ids.add(row["id"])
+
+    # Inject structured memories as a system message immediately after the persona prompt
+    memory_text = _memories_as_text(conn())
+    if memory_text:
+        mem_msg = {"role": "system", "content": memory_text}
+        if messages_for_model and messages_for_model[0]["role"] == "system":
+            messages_for_model.insert(1, mem_msg)
+        else:
+            messages_for_model.insert(0, mem_msg)
+
+    # Inject RAG context — searches all conversations, skips messages already in the window
     if last_user:
-        rag_chunks = await retrieve_context(conn(), last_user.content, exclude_conv_id=conv_id)
+        rag_chunks = await retrieve_context(conn(), last_user.content, exclude_message_ids=in_window_msg_ids)
         if rag_chunks:
             rag_text = "\n\n".join(c["chunk_text"] for c in rag_chunks)
-            rag_msg = {"role": "system", "content": f"Relevant context from past conversations:\n{rag_text}"}
+            rag_msg = {"role": "system", "content": f"Relevant context from memory:\n{rag_text}"}
             if messages_for_model and messages_for_model[0]["role"] == "system":
                 messages_for_model.insert(1, rag_msg)
             else:
@@ -250,14 +434,22 @@ async def chat_completions(body: ChatRequest):
     # We allow one round of tool calls before streaming the final answer.
     import json as _json
 
-    provider, resolved_model, tool_msg = await provider_router.call_with_tools(
-        body.model,
-        messages_for_model,
-        TOOLS,
-        body.max_tokens,
-    )
+    try:
+        provider, resolved_model, tool_msg = await provider_router.call_with_tools(
+            body.model,
+            messages_for_model,
+            TOOLS,
+            body.max_tokens,
+        )
+    except RuntimeError as exc:
+        error_msg = str(exc)
+        # Surface content-filter hits and other probe errors as a clean SSE error stream
+        async def error_stream():
+            yield f"data: {_json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     tool_calls = tool_msg.get("tool_calls") or []
+    tools_used: list[dict] = []  # [{name, query?}] — forwarded to frontend in done event
     if tool_calls:
         # Append the assistant's tool-call message to the conversation
         messages_for_model.append(tool_msg)
@@ -268,7 +460,16 @@ async def chat_completions(body: ChatRequest):
                 args = _json.loads(fn.get("arguments") or "{}")
             except _json.JSONDecodeError:
                 args = {}
-            result = execute_tool(fn["name"], args)
+            result = await execute_tool(fn["name"], args)
+            tool_entry: dict = {"name": fn["name"]}
+            if fn["name"] == "web_search":
+                tool_entry["query"] = args.get("query", "")
+                try:
+                    parsed = _json.loads(result)
+                    tool_entry["results"] = parsed.get("results", [])
+                except Exception:
+                    tool_entry["results"] = []
+            tools_used.append(tool_entry)
             messages_for_model.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
@@ -302,12 +503,17 @@ async def chat_completions(body: ChatRequest):
             db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
+        try:
+            await embed_message(conn(), conv_id, msg_id, full_text)
+        except Exception:
+            pass
         return {
             "conversation_id": conv_id,
             "model": resolved_model,
             "provider": provider,
             "message": {"role": "assistant", "content": full_text},
             "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "cost_usd": cost},
+            "tools_used": tools_used,
         }
 
     # Streaming response — SSE
@@ -334,9 +540,72 @@ async def chat_completions(body: ChatRequest):
             db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
-        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': cost}})}\n\n"
+        # Send done before embedding — embedding calls Azure and must not block or error the response
+        yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id, 'model': resolved_model, 'provider': provider, 'usage': {'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'cost_usd': cost}, 'tools_used': tools_used})}\n\n"
+        try:
+            await embed_message(conn(), conv_id, msg_id, full_text)
+        except Exception:
+            pass  # embedding failure is non-fatal; RAG will just miss this message
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# --- Memory CRUD ---
+
+class MemoryCreate(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+    ttl_hours: float | None = 24.0
+    pinned: bool = False
+
+class MemoryUpdate(BaseModel):
+    subject: str | None = None
+    predicate: str | None = None
+    object: str | None = None
+    ttl_hours: float | None = None
+    pinned: bool | None = None
+
+
+@app.get("/v1/memories")
+async def list_memories_endpoint(q: str | None = None):
+    if q:
+        return await _search_memories(conn(), q)
+    return _list_memories(conn())
+
+
+@app.post("/v1/memories", status_code=201)
+async def create_memory(body: MemoryCreate):
+    result = _store_memory(conn(), body.subject, body.predicate, body.object,
+                           ttl_hours=body.ttl_hours, pinned=body.pinned)
+    await _embed_memory(conn(), result["id"], result["subject"], result["predicate"], result["object"])
+    return result
+
+
+@app.patch("/v1/memories/{memory_id}")
+async def update_memory(memory_id: str, body: MemoryUpdate):
+    row = conn().execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "Memory not found")
+    # Special case: only toggling pin
+    if body.subject is None and body.predicate is None and body.object is None and body.pinned is not None:
+        result = _set_pinned(conn(), memory_id, body.pinned)
+        return result
+    new_subject   = body.subject   if body.subject   is not None else row["subject"]
+    new_predicate = body.predicate if body.predicate is not None else row["predicate"]
+    new_object    = body.object    if body.object    is not None else row["object"]
+    new_ttl       = body.ttl_hours if body.ttl_hours is not None else None
+    new_pinned    = body.pinned    if body.pinned    is not None else bool(row["pinned"])
+    result = _store_memory(conn(), new_subject, new_predicate, new_object,
+                           ttl_hours=new_ttl, pinned=new_pinned)
+    await _embed_memory(conn(), result["id"], result["subject"], result["predicate"], result["object"])
+    return result
+
+
+@app.delete("/v1/memories/{memory_id}", status_code=204)
+def delete_memory_endpoint(memory_id: str):
+    if not _delete_memory(conn(), memory_id):
+        raise HTTPException(404, "Memory not found")
 
 
 # --- Usage / cost ---
@@ -385,3 +654,43 @@ def upsert_pricing_endpoint(provider: str, model: str, body: PricingUpdate):
 async def get_context(query: str, exclude_conv_id: str | None = None):
     chunks = await retrieve_context(conn(), query, exclude_conv_id)
     return {"chunks": chunks}
+
+
+# --- Tools manifest ---
+
+@app.get("/v1/tools")
+def list_tools():
+    return [
+        {
+            "name": t["function"]["name"],
+            "description": t["function"]["description"],
+            "parameters": list(t["function"]["parameters"].get("properties", {}).keys()),
+            "required": t["function"]["parameters"].get("required", []),
+        }
+        for t in TOOLS
+    ]
+
+
+# --- Search usage ---
+
+@app.get("/v1/search/usage")
+def search_usage():
+    return _search_get_usage(conn())
+
+
+# --- Tokenizer ---
+
+class TokenizeRequest(BaseModel):
+    text: str
+
+
+@app.get("/v1/tokenizer/info")
+def tokenizer_info_endpoint():
+    from .tools.tokenizer_tool import tokenizer_info
+    return tokenizer_info()
+
+
+@app.post("/v1/tokenizer/tokenize")
+def tokenize_endpoint(body: TokenizeRequest):
+    from .tools.tokenizer_tool import tokenize
+    return tokenize(body.text)

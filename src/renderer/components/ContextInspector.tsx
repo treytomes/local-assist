@@ -1,23 +1,15 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Drawer, Tag, Typography } from 'antd'
 import { useAppStore } from '../store'
-import { AVAILABLE_MODELS } from '@shared/types'
 
 const { Text } = Typography
 
-// Keep in sync with TOOLS in main.py — frontend mirror for display only
-const TOOL_DEFINITIONS = [
-  {
-    name: 'get_datetime',
-    description: 'Get the current date, time, and timezone.',
-    parameters: ['timezone (optional IANA name)'],
-  },
-  {
-    name: 'get_system_info',
-    description: 'Returns OS, CPU, RAM, swap, GPU details, and system model.',
-    parameters: [],
-  },
-]
+interface ToolDef {
+  name: string
+  description: string
+  parameters: string[]
+  required: string[]
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
   return (
@@ -64,6 +56,18 @@ export default function ContextInspector({ open, onClose }: Props): React.ReactE
     messagesByConv,
     health,
   } = useAppStore()
+
+  const [tools, setTools] = useState<ToolDef[]>([])
+  useEffect(() => {
+    if (!open) {
+      setTools([])
+      return
+    }
+    fetch(`${backendUrl}/v1/tools`)
+      .then((r) => r.json())
+      .then(setTools)
+      .catch(() => setTools([]))
+  }, [open, backendUrl])
 
   const params = modelParams[selectedModel]
   const allMessages = activeConvId ? (messagesByConv[activeConvId] ?? []) : []
@@ -117,20 +121,31 @@ export default function ContextInspector({ open, onClose }: Props): React.ReactE
       <Section title="Model Parameters">
         <Row label="Model" value={selectedModel} />
         <Row label="Max tokens" value={params.maxTokens.toLocaleString()} />
-        <Row label="Temperature" value={
-          AVAILABLE_MODELS.includes(selectedModel as typeof AVAILABLE_MODELS[number]) &&
-          selectedModel === 'gpt-5.3-chat' ? 'n/a (fixed)' : params.temperature.toFixed(2)
-        } />
+        <Row label="Temperature" value={params.temperature.toFixed(2)} />
         <Row label="Context window" value={`${params.contextWindow} messages`} />
       </Section>
 
       {/* Tools */}
-      <Section title="Available Tools">
-        {TOOL_DEFINITIONS.map((t) => (
+      <Section title={`Available Tools (${tools.length})`}>
+        {tools.length === 0 ? (
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>Loading…</Text>
+        ) : tools.map((t) => (
           <div key={t.name} style={{ marginBottom: 8, padding: '6px 8px', background: 'var(--vscode-surface)', borderRadius: 2, border: '1px solid var(--vscode-border)' }}>
             <Text style={{ color: 'var(--vscode-text)', fontSize: 12, fontFamily: 'monospace', display: 'block' }}>{t.name}</Text>
             <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, display: 'block' }}>{t.description}</Text>
-            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>Params: {t.parameters.join(', ')}</Text>
+            {t.parameters.length > 0 && (
+              <div style={{ marginTop: 2 }}>
+                {t.parameters.map((p) => (
+                  <Tag
+                    key={p}
+                    color={t.required.includes(p) ? 'default' : 'default'}
+                    style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: '0 2px 2px 0', opacity: t.required.includes(p) ? 1 : 0.6 }}
+                  >
+                    {t.required.includes(p) ? p : `${p}?`}
+                  </Tag>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </Section>

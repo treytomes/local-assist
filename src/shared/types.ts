@@ -38,8 +38,13 @@ export interface Message {
   model?: string | null
   provider?: string | null
   timestamp: string
-  // frontend-only: streamed assistant turns not yet persisted
+  // frontend-only fields (not persisted)
   streaming?: boolean
+  tools_used?: Array<{
+    name: string
+    query?: string
+    results?: Array<{ title: string; url: string; content: string; score: number }>
+  }>
 }
 
 export interface ConvUsage {
@@ -48,5 +53,5 @@ export interface ConvUsage {
   completion_tokens: number
 }
 
-export const AVAILABLE_MODELS = ['gpt-5.3-chat', 'Mistral-Large-3'] as const
+export const AVAILABLE_MODELS = ['Mistral-Large-3'] as const
 export type ModelId = (typeof AVAILABLE_MODELS)[number]

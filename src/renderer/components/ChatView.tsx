@@ -71,20 +71,6 @@ export default function ChatView(): React.ReactElement {
     [setActiveConvId]
   )
 
-  const handleModelChange = useCallback(
-    (model: ModelId) => {
-      setSelectedModel(model)
-      if (!activeConvId) return
-      updateConversation(activeConvId, { model })
-      fetch(`${backendUrl}/v1/conversations/${activeConvId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model })
-      }).catch(console.error)
-    },
-    [activeConvId, backendUrl, setSelectedModel, updateConversation]
-  )
-
   const handleSend = useCallback(
     async (text: string, isRetry = false, historyOverride?: Message[]) => {
       // Create conversation on first message if none selected
@@ -186,15 +172,23 @@ export default function ChatView(): React.ReactElement {
                 model?: string
                 provider?: string
                 usage?: { prompt_tokens: number; completion_tokens: number; cost_usd: number }
+                tools_used?: Array<{ name: string; query?: string }>
               }
-              if (evt.type === 'delta' && evt.content) {
+              if (evt.type === 'error') {
+                patchMessage(convId!, assistantMsgId, {
+                  content: `[Error: ${(evt as { message?: string }).message ?? 'unknown error'}]`,
+                  streaming: false
+                })
+                return
+              } else if (evt.type === 'delta' && evt.content) {
                 accumulatedContent += evt.content
                 patchMessage(convId!, assistantMsgId, { content: accumulatedContent })
               } else if (evt.type === 'done' && evt.usage) {
                 patchMessage(convId!, assistantMsgId, {
                   streaming: false,
                   model: evt.model,
-                  provider: evt.provider
+                  provider: evt.provider,
+                  tools_used: evt.tools_used ?? []
                 })
                 setConvUsage(convId!, {
                   total_cost_usd: evt.usage.cost_usd,
@@ -353,8 +347,6 @@ export default function ChatView(): React.ReactElement {
 
         <ChatThread messages={messages} onRetry={handleRetry} onDeleteMessage={handleDeleteMessage} retryDisabled={streaming} />
         <MessageComposer
-          model={selectedModel}
-          onModelChange={handleModelChange}
           onSend={handleSend}
           streaming={streaming}
         />

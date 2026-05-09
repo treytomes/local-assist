@@ -2,56 +2,41 @@ import React, { useState } from 'react'
 import { Input, InputNumber, Modal, Slider, Tabs, Typography } from 'antd'
 import { useAppStore } from '../store'
 import type { ModelParams } from '../store'
-import { AVAILABLE_MODELS } from '@shared/types'
-import type { ModelId } from '@shared/types'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
-// Models that don't accept a temperature parameter
-const NO_TEMPERATURE_MODELS: ReadonlySet<ModelId> = new Set(['gpt-5.3-chat'])
+const MODEL = 'Mistral-Large-3' as const
 
 function ModelParamEditor({
-  model,
   params,
   onChange
 }: {
-  model: ModelId
   params: ModelParams
   onChange: (p: ModelParams) => void
 }): React.ReactElement {
-  const supportsTemperature = !NO_TEMPERATURE_MODELS.has(model)
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 480 }}>
-      <Title level={5} style={{ color: 'var(--vscode-text)', margin: 0 }}>
-        {model}
-      </Title>
-
-      {/* Temperature — hidden for models that don't accept it */}
-      {supportsTemperature && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-            <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Temperature</Text>
-            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
-              {params.temperature.toFixed(2)}
-            </Text>
-          </div>
-          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, display: 'block', marginBottom: 6 }}>
-            Higher = more creative, lower = more deterministic. Range 0.0 – 2.0.
+      <div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Temperature</Text>
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, fontFamily: 'monospace' }}>
+            {params.temperature.toFixed(2)}
           </Text>
-          <Slider
-            min={0}
-            max={2}
-            step={0.05}
-            value={params.temperature}
-            onChange={(v) => onChange({ ...params, temperature: v })}
-            styles={{ track: { background: 'var(--vscode-accent)' } }}
-          />
         </div>
-      )}
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, display: 'block', marginBottom: 6 }}>
+          Higher = more creative, lower = more deterministic. Range 0.0 – 2.0.
+        </Text>
+        <Slider
+          min={0}
+          max={2}
+          step={0.05}
+          value={params.temperature}
+          onChange={(v) => onChange({ ...params, temperature: v })}
+          styles={{ track: { background: 'var(--vscode-accent)' } }}
+        />
+      </div>
 
-      {/* Max tokens */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
           <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Max output tokens</Text>
@@ -70,7 +55,6 @@ function ModelParamEditor({
         </Text>
       </div>
 
-      {/* Context window */}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
           <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Context window (messages)</Text>
@@ -113,9 +97,7 @@ export default function SettingsModal(): React.ReactElement {
 
   function handleOk(): void {
     setSystemPrompt(draftPrompt)
-    for (const model of AVAILABLE_MODELS) {
-      setModelParams(model, draftParams[model])
-    }
+    setModelParams(MODEL, draftParams[MODEL])
     setSettingsOpen(false)
   }
 
@@ -144,25 +126,11 @@ export default function SettingsModal(): React.ReactElement {
         items={[
           {
             key: 'models',
-            label: 'Models',
+            label: 'Model',
             children: (
-              <Tabs
-                tabPosition="left"
-                size="small"
-                style={{ minHeight: 300 }}
-                items={AVAILABLE_MODELS.map((model) => ({
-                  key: model,
-                  label: (
-                    <Text style={{ color: 'var(--vscode-text)', fontSize: 12 }}>{model}</Text>
-                  ),
-                  children: (
-                    <ModelParamEditor
-                      model={model}
-                      params={draftParams[model]}
-                      onChange={(p) => setDraftParams((prev) => ({ ...prev, [model]: p }))}
-                    />
-                  )
-                }))}
+              <ModelParamEditor
+                params={draftParams[MODEL]}
+                onChange={(p) => setDraftParams((prev) => ({ ...prev, [MODEL]: p }))}
               />
             )
           },

@@ -1,20 +1,14 @@
 import React, { useRef, useState } from 'react'
-import { Button, Select, Tooltip } from 'antd'
+import { Button, Tooltip } from 'antd'
 import { SendOutlined } from '@ant-design/icons'
-import { AVAILABLE_MODELS } from '@shared/types'
-import type { ModelId } from '@shared/types'
 
 interface Props {
-  model: ModelId
-  onModelChange: (m: ModelId) => void
   onSend: (text: string) => void
   disabled?: boolean
   streaming?: boolean
 }
 
 export default function MessageComposer({
-  model,
-  onModelChange,
   onSend,
   disabled,
   streaming
@@ -59,17 +53,6 @@ export default function MessageComposer({
         flexShrink: 0
       }}
     >
-      {/* Model selector row */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Select
-          size="small"
-          value={model}
-          onChange={onModelChange}
-          options={AVAILABLE_MODELS.map((m) => ({ label: m, value: m }))}
-          style={{ width: 180, fontSize: 12 }}
-        />
-      </div>
-
       {/* Input row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
         <textarea

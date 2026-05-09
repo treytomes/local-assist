@@ -1,8 +1,10 @@
 import React, { useEffect } from 'react'
 import { ConfigProvider, Tabs, theme } from 'antd'
-import { ApiOutlined, MessageOutlined } from '@ant-design/icons'
+import { ApiOutlined, DatabaseOutlined, MessageOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ChatView from './components/ChatView'
 import DiagnosticDashboard from './components/DiagnosticDashboard'
+import MemoryView from './components/MemoryView'
+import TokenizerView from './components/TokenizerView'
 import { useAppStore } from './store'
 import './styles/index.css'
 
@@ -78,6 +80,26 @@ export default function App(): React.ReactElement {
                 </span>
               ),
               children: <ChatView />
+            },
+            {
+              key: 'memory',
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <DatabaseOutlined style={{ fontSize: 13 }} />
+                  Memory
+                </span>
+              ),
+              children: <MemoryView />
+            },
+            {
+              key: 'tokenizer',
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <ExperimentOutlined style={{ fontSize: 13 }} />
+                  Tokenizer
+                </span>
+              ),
+              children: <TokenizerView />
             },
             {
               key: 'diagnostics',

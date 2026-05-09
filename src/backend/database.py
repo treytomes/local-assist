@@ -5,6 +5,9 @@ from contextlib import contextmanager
 
 DB_PATH = Path.home() / ".local" / "share" / "local-assist" / "local-assist.db"
 
+# Module-level singleton — set by main.py lifespan, read by mcp_server.py tools.
+_shared_conn: sqlite3.Connection | None = None
+
 
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -14,6 +17,17 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.load_extension(sqlite_vec.loadable_path())
     return conn
+
+
+def set_shared_connection(conn: sqlite3.Connection) -> None:
+    global _shared_conn
+    _shared_conn = conn
+
+
+def shared_connection() -> sqlite3.Connection:
+    if _shared_conn is None:
+        raise RuntimeError("Database connection not initialised yet")
+    return _shared_conn
 
 
 @contextmanager
@@ -73,21 +87,51 @@ CREATE VIRTUAL TABLE IF NOT EXISTS embeddings USING vec0(
     embedding       float[1536]
 );
 
+CREATE TABLE IF NOT EXISTS search_calls (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    query     TEXT NOT NULL,
+    called_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_conversation    ON usage(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp       ON usage(timestamp);
+CREATE INDEX IF NOT EXISTS idx_search_calls_date     ON search_calls(called_at);
 """
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    from .tools.memory_tool import MEMORY_SCHEMA
+
+    # Execute base schema (tables only — indexes and virtual tables come after migrations)
     for stmt in SCHEMA.split(";"):
         stmt = stmt.strip()
         if stmt:
             conn.execute(stmt)
-    # Idempotent migrations for existing databases
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
-    if "model" not in cols:
+
+    # Column migrations must run before MEMORY_SCHEMA, which creates indexes that
+    # reference these columns. ALTER TABLE is a no-op if the column already exists.
+    msg_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "model" not in msg_cols:
         conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+
+    mem_tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")}
+    if mem_tables:
+        mem_cols = {row[1] for row in conn.execute("PRAGMA table_info(memories)")}
+        if "pinned" not in mem_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        if "expires_at" not in mem_cols:
+            conn.execute("ALTER TABLE memories ADD COLUMN expires_at TEXT")
+
+    # Now safe to create indexes and virtual tables that reference the migrated columns
+    for stmt in MEMORY_SCHEMA.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            try:
+                conn.execute(stmt)
+            except Exception:
+                pass  # index/table already exists
+
     conn.commit()
 
 
