@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react'
-import { ConfigProvider, Tabs, theme } from 'antd'
+import React, { useEffect, useRef } from 'react'
+import { App as AntApp, ConfigProvider, Tabs, notification, theme } from 'antd'
 import { ApiOutlined, DatabaseOutlined, MessageOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ChatView from './components/ChatView'
 import DiagnosticDashboard from './components/DiagnosticDashboard'
@@ -48,6 +48,97 @@ const antdTheme = {
   }
 }
 
+function NotificationListener(): React.ReactElement {
+  const backendUrl = useAppStore((s) => s.backendUrl)
+  const activeConvId = useAppStore((s) => s.activeConvId)
+  const appendMessage = useAppStore((s) => s.appendMessage)
+  const addConversation = useAppStore((s) => s.addConversation)
+  const setActiveConvId = useAppStore((s) => s.setActiveConvId)
+  const setMessages = useAppStore((s) => s.setMessages)
+  const selectedModel = useAppStore((s) => s.selectedModel)
+  const [api, contextHolder] = notification.useNotification()
+  const esRef = useRef<EventSource | null>(null)
+  // Refs so the onmessage closure always sees latest values without reconnecting
+  const activeConvIdRef = useRef(activeConvId)
+  const selectedModelRef = useRef(selectedModel)
+  activeConvIdRef.current = activeConvId
+  selectedModelRef.current = selectedModel
+
+  useEffect(() => {
+    if (!backendUrl) return
+    if (esRef.current) esRef.current.close()
+    const es = new EventSource(`${backendUrl}/v1/notifications`)
+    esRef.current = es
+
+    es.onmessage = async (evt) => {
+      try {
+        const data = JSON.parse(evt.data)
+        if (data.type !== 'event') return
+
+        // Resolve or create the target conversation
+        let convId = activeConvIdRef.current
+        if (!convId) {
+          try {
+            const res = await fetch(`${backendUrl}/v1/conversations`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: data.title, model: selectedModelRef.current }),
+            })
+            const conv = await res.json()
+            addConversation(conv)
+            setActiveConvId(conv.id)
+            setMessages(conv.id, [])
+            convId = conv.id
+          } catch {
+            return
+          }
+        }
+
+        let result: { assistant_message: { id: string; role: string; content: string; conversation_id: string; model: string } }
+        try {
+          const res = await fetch(`${backendUrl}/v1/events/handle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              conversation_id: convId,
+              watcher_name: data.watcher_name,
+              title: data.title,
+              body: data.body,
+            }),
+          })
+          if (!res.ok) return
+          result = await res.json()
+        } catch {
+          return
+        }
+
+        appendMessage(convId!, {
+          id: result.assistant_message.id,
+          conversation_id: convId!,
+          role: 'assistant',
+          content: result.assistant_message.content,
+          model: result.assistant_message.model,
+          timestamp: new Date().toISOString(),
+          reactions: [],
+        })
+
+        api.info({
+          message: data.title,
+          description: result.assistant_message.content.slice(0, 200),
+          placement: 'bottomRight',
+          duration: 10,
+        })
+      } catch {
+        // malformed payload — ignore
+      }
+    }
+
+    return () => { es.close(); esRef.current = null }
+  }, [backendUrl, api, appendMessage, addConversation, setActiveConvId, setMessages])
+
+  return <>{contextHolder}</>
+}
+
 export default function App(): React.ReactElement {
   const setBackendUrl = useAppStore((s) => s.setBackendUrl)
 
@@ -57,6 +148,8 @@ export default function App(): React.ReactElement {
 
   return (
     <ConfigProvider theme={antdTheme}>
+      <AntApp>
+      <NotificationListener />
       <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', background: 'var(--vscode-bg)' }}>
         <Tabs
           defaultActiveKey="chat"
@@ -114,6 +207,7 @@ export default function App(): React.ReactElement {
           ]}
         />
       </div>
+      </AntApp>
     </ConfigProvider>
   )
 }

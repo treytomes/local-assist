@@ -1,17 +1,29 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { join } from 'path'
 import { spawn, ChildProcess } from 'child_process'
+import { createWriteStream, mkdirSync, WriteStream } from 'fs'
 
 const BACKEND_URL = 'http://127.0.0.1:8000'
 let backendProcess: ChildProcess | null = null
+let backendLogStream: WriteStream | null = null
+
+function getLogPath(): string {
+  const logDir = join(app.getPath('userData'), 'logs')
+  mkdirSync(logDir, { recursive: true })
+  return join(logDir, 'backend.log')
+}
 
 function spawnBackend(): void {
   const appPath = app.getAppPath()
   console.log('[main] Spawning FastAPI backend from', appPath)
 
+  const logPath = getLogPath()
+  backendLogStream = createWriteStream(logPath, { flags: 'a' })
+  console.log('[main] Backend logs →', logPath)
+
   backendProcess = spawn(
     join(appPath, '.venv', 'bin', 'python'),
-    ['-m', 'uvicorn', 'src.backend.main:app', '--host', '127.0.0.1', '--port', '8000'],
+    ['-m', 'uvicorn', 'src.backend.main:app', '--host', '127.0.0.1', '--port', '8000', '--log-level', 'debug'],
     {
       cwd: appPath,
       stdio: 'pipe',
@@ -19,11 +31,18 @@ function spawnBackend(): void {
     }
   )
 
-  backendProcess.stdout?.on('data', (d: Buffer) => console.log('[backend]', d.toString().trim()))
-  backendProcess.stderr?.on('data', (d: Buffer) => console.error('[backend]', d.toString().trim()))
-  backendProcess.on('exit', (code: number | null) =>
+  const write = (prefix: string, d: Buffer) => {
+    const line = `${new Date().toISOString()} ${prefix} ${d.toString().trimEnd()}\n`
+    backendLogStream?.write(line)
+    console.log(line.trimEnd())
+  }
+
+  backendProcess.stdout?.on('data', (d: Buffer) => write('[backend]', d))
+  backendProcess.stderr?.on('data', (d: Buffer) => write('[backend]', d))
+  backendProcess.on('exit', (code: number | null) => {
     console.log('[main] Backend exited with code', code)
-  )
+    backendLogStream?.end()
+  })
 }
 
 function createWindow(): BrowserWindow {

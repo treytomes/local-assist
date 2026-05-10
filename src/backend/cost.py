@@ -123,6 +123,11 @@ def record_usage(
     return cost
 
 
+def get_all_time_cost(conn: sqlite3.Connection) -> float:
+    row = conn.execute("SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM usage").fetchone()
+    return float(row["total"])
+
+
 def get_conversation_cost(conn: sqlite3.Connection, conv_id: str) -> dict:
     row = conn.execute(
         """

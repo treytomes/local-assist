@@ -81,9 +81,10 @@ export interface Message {
   model?: string | null
   provider?: string | null
   timestamp: string
-  // frontend-only fields (not persisted)
+  // frontend-only transient fields
   streaming?: boolean
   reactions?: Reaction[]
+  // persisted — returned from GET /v1/conversations/:id
   tools_used?: Array<{
     name: string
     query?: string

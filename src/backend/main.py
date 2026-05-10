@@ -1,9 +1,13 @@
+import asyncio
+import logging
 import sqlite3
 import uuid
 import os
 import threading
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Any, Literal
+
+log = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -21,6 +25,7 @@ from .cost import (
 from . import router as provider_router
 from .rag import embed_conversation, embed_message, retrieve_context
 from . import database as db
+from .database import save_watcher as _db_save_watcher, delete_watcher_row as _db_delete_watcher, load_pending_watchers as _db_load_watchers, get_setting as _db_get_setting, set_setting as _db_set_setting
 from .mcp_server import mcp
 from .tools.datetime_tool import get_datetime as tool_get_datetime
 from .tools.system_info_tool import get_system_info as tool_get_system_info
@@ -36,6 +41,13 @@ from .tools.memory_tool import (
     get_all_as_text as _memories_as_text,
 )
 from .tools.search import web_search as _web_search, get_usage as _search_get_usage
+from .events.watcher import WatcherRegistry, set_registry
+from .events.response_loop import run_response_loop, add_sse_client, remove_sse_client
+from .events.sources.calendar_watcher import make_calendar_watcher
+from .events.sources.system_watcher import make_system_watcher
+from .events.sources.schedule_watcher import make_schedule_watcher
+from .events.sources.alarm_watcher import make_alarm_watcher
+from .events.sources.cost_watcher import make_cost_watcher
 from .tools.google import (
     auth_status as _google_auth_status,
     start_oauth_flow as _google_start_oauth,
@@ -72,7 +84,50 @@ async def lifespan(app: FastAPI):
     seed_pricing(raw)
     _conn = _LockedConn(raw, _db_lock)
     set_shared_connection(_conn)
+
+    # Event watcher infrastructure
+    def _watcher_interval(source_type: str, default: int) -> int:
+        v = _db_get_setting(_conn, f"watcher_interval.{source_type}")
+        try:
+            return int(v) if v is not None else default
+        except ValueError:
+            return default
+
+    registry = WatcherRegistry()
+    cw = make_calendar_watcher(); cw.interval_seconds = _watcher_interval("calendar", cw.interval_seconds)
+    sw = make_system_watcher();   sw.interval_seconds = _watcher_interval("system",   sw.interval_seconds)
+    scw = make_schedule_watcher(); scw.interval_seconds = _watcher_interval("schedule", scw.interval_seconds)
+    cow = make_cost_watcher();    cow.interval_seconds = _watcher_interval("cost",     cow.interval_seconds)
+    registry.register(cw)
+    registry.register(sw)
+    registry.register(scw)
+    registry.register(cow)
+
+    # Delete hook: remove the DB row whenever an alarm watcher is deleted (fired or manual)
+    def _on_watcher_delete(watcher_id: str) -> None:
+        try:
+            with db.transaction(_conn):
+                _db_delete_watcher(_conn, watcher_id)
+        except Exception:
+            pass
+
+    registry.add_delete_hook(_on_watcher_delete)
+
+    # Restore persisted alarms that haven't fired yet
+    for row in _db_load_watchers(_conn):
+        w = make_alarm_watcher(row["description"], row["fire_at"], watcher_id=row["id"])
+        w.enabled = bool(row["enabled"])
+        registry.register(w)
+        registry._start_watcher(w)
+
+    set_registry(registry)
+    registry.start_all()
+
+    _response_loop_task = asyncio.create_task(run_response_loop(registry))
+
     yield
+
+    _response_loop_task.cancel()
     if _conn:
         _conn.close()
 
@@ -277,6 +332,34 @@ TOOLS: list[dict] = [
                     "emoji": {"type": "string", "description": "A single emoji character."},
                 },
                 "required": ["message_id", "emoji"],
+            },
+        },
+    },
+    # --- Reminders ---
+    {
+        "type": "function",
+        "function": {
+            "name": "set_reminder",
+            "description": (
+                "Set a one-shot reminder that will fire at a specific date and time. "
+                "Mara will proactively surface the reminder message in the active conversation at the scheduled time. "
+                "Always call get_datetime first to know the current time so you can calculate the correct fire_at. "
+                "Use ISO 8601 format for fire_at (e.g. '2026-05-10T07:45:00'). "
+                "Reminders are in-memory only and are lost if the app restarts before they fire."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The reminder message to surface when the alarm fires.",
+                    },
+                    "fire_at": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime when the reminder should fire (e.g. '2026-05-10T07:45:00').",
+                    },
+                },
+                "required": ["message", "fire_at"],
             },
         },
     },
@@ -510,6 +593,42 @@ async def execute_tool(name: str, arguments: dict) -> str:
         with db.transaction(conn()):
             row = db.add_reaction(conn(), str(_uuid.uuid4()), message_id, "assistant", emoji)
         return json.dumps({"reaction": dict(row)})
+    # --- Reminders ---
+    if name == "set_reminder":
+        message = arguments.get("message", "")
+        fire_at = arguments.get("fire_at", "")
+        log.info("set_reminder called: message=%r fire_at=%r", message, fire_at)
+        if not message or not fire_at:
+            return json.dumps({"error": "message and fire_at are required"})
+        try:
+            from .events.watcher import get_registry
+            from datetime import datetime as _dt, timezone as _tz
+            # Validate fire_at is in the future — reject stale dates outright
+            _fire_dt = _dt.fromisoformat(fire_at)
+            if _fire_dt.tzinfo is None:
+                _fire_dt = _fire_dt.astimezone()
+            _delay = (_fire_dt - _dt.now(_tz.utc)).total_seconds()
+            if _delay < 0:
+                return json.dumps({"error": f"fire_at '{fire_at}' is in the past. Call get_datetime first to get the current time, then construct a future fire_at."})
+            watcher = make_alarm_watcher(message, fire_at)
+            log.info("set_reminder: created watcher id=%s fire_at=%s poll_fn=%s", watcher.id, watcher.fire_at, watcher._poll_fn)
+            registry = get_registry()
+            registry.register(watcher)
+            log.info("set_reminder: registered. registry now has %d watchers", len(registry.all()))
+            registry._start_watcher(watcher)
+            log.info("set_reminder: task started: task=%s", watcher._task)
+            with db.transaction(conn()):
+                _db_save_watcher(conn(), watcher.id, watcher.source_type, watcher.name, watcher.description, watcher.fire_at)
+            log.info("set_reminder: persisted to DB")
+            return json.dumps({
+                "ok": True,
+                "watcher_id": watcher.id,
+                "message": message,
+                "fire_at": watcher.fire_at,
+            })
+        except Exception as exc:
+            log.error("set_reminder: exception: %s", exc, exc_info=True)
+            return json.dumps({"error": str(exc)})
     # --- Google tools ---
     if name == "list_calendars":
         return json.dumps(_list_calendars(conn()))
@@ -890,7 +1009,7 @@ async def chat_completions(body: ChatRequest):
 
         msg_id = str(uuid.uuid4())
         with db.transaction(conn()):
-            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
+            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model, tools_used=tools_used or None)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
         try:
@@ -933,7 +1052,7 @@ async def chat_completions(body: ChatRequest):
 
         msg_id = str(uuid.uuid4())
         with db.transaction(conn()):
-            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model)
+            db.insert_message(conn(), msg_id, conv_id, "assistant", full_text, model=resolved_model, tools_used=tools_used or None)
         cost = record_usage(conn(), str(uuid.uuid4()), conv_id, msg_id, provider, resolved_model,
                             prompt_tokens, completion_tokens)
         # Send done before embedding — embedding calls Azure and must not block or error the response
@@ -1140,3 +1259,209 @@ async def google_auth_start():
 @app.post("/v1/google/revoke", status_code=200)
 def google_revoke():
     return _google_revoke(conn())
+
+
+# --- Watchers ---
+
+class WatcherPatch(BaseModel):
+    enabled: bool | None = None
+    interval_seconds: int | None = None
+
+
+@app.get("/v1/watchers")
+def list_watchers():
+    from .events.watcher import get_registry
+    return [w.to_dict() for w in get_registry().all()]
+
+
+@app.patch("/v1/watchers/{watcher_id}")
+def patch_watcher(watcher_id: str, body: WatcherPatch):
+    from .events.watcher import get_registry
+    w = get_registry().patch(watcher_id, enabled=body.enabled, interval_seconds=body.interval_seconds)
+    if not w:
+        raise HTTPException(404, "Watcher not found")
+    with db.transaction(conn()):
+        if w.source_type == "alarm" and w.fire_at:
+            # Persist enabled state for alarm watchers
+            _db_save_watcher(conn(), w.id, w.source_type, w.name, w.description, w.fire_at, w.enabled)
+        elif w.source_type in ("calendar", "system", "schedule", "cost"):
+            # Persist interval for built-in watchers so it survives restarts
+            if body.interval_seconds is not None:
+                _db_set_setting(conn(), f"watcher_interval.{w.source_type}", str(w.interval_seconds))
+    return w.to_dict()
+
+
+@app.delete("/v1/watchers/{watcher_id}", status_code=204)
+def delete_watcher(watcher_id: str):
+    from .events.watcher import get_registry
+    if not get_registry().delete(watcher_id):
+        raise HTTPException(404, "Watcher not found")
+
+
+# --- Quiet hours ---
+
+class QuietHoursBody(BaseModel):
+    enabled: bool
+    start: str  # "HH:MM"
+    end: str    # "HH:MM"
+
+
+@app.get("/v1/quiet-hours")
+def get_quiet_hours():
+    enabled = _db_get_setting(conn(), "quiet_hours_enabled") or "1"
+    start   = _db_get_setting(conn(), "quiet_hours_start")   or "21:00"
+    end     = _db_get_setting(conn(), "quiet_hours_end")     or "07:00"
+    return {"enabled": enabled != "0", "start": start, "end": end}
+
+
+@app.put("/v1/quiet-hours")
+def put_quiet_hours(body: QuietHoursBody):
+    with db.transaction(conn()):
+        _db_set_setting(conn(), "quiet_hours_enabled", "1" if body.enabled else "0")
+        _db_set_setting(conn(), "quiet_hours_start", body.start)
+        _db_set_setting(conn(), "quiet_hours_end", body.end)
+    return {"enabled": body.enabled, "start": body.start, "end": body.end}
+
+
+# --- Cost alert threshold sync ---
+
+class CostAlertBody(BaseModel):
+    threshold: float | None  # None = disabled
+
+
+@app.put("/v1/settings/cost-alert")
+def put_cost_alert(body: CostAlertBody):
+    with db.transaction(conn()):
+        if body.threshold is None or body.threshold <= 0:
+            _db_set_setting(conn(), "cost_alert_threshold", "")
+        else:
+            _db_set_setting(conn(), "cost_alert_threshold", str(body.threshold))
+    return {"threshold": body.threshold}
+
+
+# --- Event handling: generate Mara reply in the context of a conversation ---
+
+class EventHandleRequest(BaseModel):
+    conversation_id: str
+    watcher_name: str
+    title: str
+    body: str
+
+
+@app.post("/v1/events/handle")
+async def handle_event(body: EventHandleRequest):
+    """
+    Called by the frontend when a watcher event fires.
+    Injects the event as a synthetic tool-call/result pair (not a visible user message)
+    so Mara sees the trigger in context without it appearing in the conversation thread.
+    Only the assistant reply is persisted and returned.
+    """
+    import json as _json
+
+    conv_id = body.conversation_id
+    if not db.get_conversation(conn(), conv_id):
+        raise HTTPException(404, "Conversation not found")
+
+    # Load existing messages to provide context
+    existing = db.get_messages(conn(), conv_id)
+
+    # Build messages for the model
+    messages_for_model: list[dict] = []
+
+    # Leading system message from conversation if any
+    sys_rows = [m for m in existing if m["role"] == "system"]
+    if sys_rows:
+        messages_for_model.append({"role": "system", "content": sys_rows[-1]["content"]})
+
+    # Inject memories right after system prompt
+    memory_text = _memories_as_text(conn())
+    if memory_text:
+        insert_at = 1 if messages_for_model and messages_for_model[0]["role"] == "system" else 0
+        messages_for_model.insert(insert_at, {"role": "system", "content": memory_text})
+
+    # Recent conversation history — skip tool-role messages (no tools declared here)
+    non_sys = [m for m in existing if m["role"] not in ("system", "tool")]
+    for m in non_sys[-CONTEXT_WINDOW:]:
+        messages_for_model.append({"role": m["role"], "content": m["content"]})
+
+    # Inject as a user turn — Mistral requires last role to be user/tool before generating.
+    # This message is never shown to the user; only the assistant reply is persisted.
+    messages_for_model.append({
+        "role": "user",
+        "content": (
+            f"[Automated reminder] {body.watcher_name}: {body.title} — {body.body}\n"
+            "(This is an automated event, not a message I typed. Respond naturally in the "
+            "context of our conversation. Be concise and direct.)"
+        ),
+    })
+
+    log.info("handle_event: sending %d messages to model", len(messages_for_model))
+    for i, m in enumerate(messages_for_model):
+        log.info("  [%d] role=%s content=%.120s", i, m.get("role"), str(m.get("content", ""))[:120])
+
+    try:
+        _, resolved_model, stream_iter = await provider_router.stream_chat(
+            "Mistral-Large-3",
+            messages_for_model,
+            max_tokens=512,
+            temperature=0.4,
+        )
+    except Exception as exc:
+        log.error("handle_event: stream_chat raised: %s", exc)
+        raise HTTPException(502, str(exc))
+
+    full_text = ""
+    async for chunk in stream_iter:
+        if chunk["type"] == "delta":
+            full_text += chunk["content"]
+        elif chunk["type"] == "error":
+            err_msg = chunk.get("message", "model error")
+            log.error("handle_event: model error: %s", err_msg[:300])
+            raise HTTPException(502, err_msg)
+
+    if not full_text.strip():
+        raise HTTPException(502, "Model returned empty response")
+
+    # Persist only the assistant reply — no visible user message
+    reply_msg_id = str(uuid.uuid4())
+    with db.transaction(conn()):
+        db.insert_message(conn(), reply_msg_id, conv_id, "assistant", full_text, model=resolved_model)
+
+    try:
+        await embed_message(conn(), conv_id, reply_msg_id, full_text)
+    except Exception:
+        pass
+
+    return {
+        "assistant_message": {
+            "id": reply_msg_id,
+            "role": "assistant",
+            "content": full_text,
+            "conversation_id": conv_id,
+            "model": resolved_model,
+        },
+    }
+
+
+# --- Notifications SSE stream ---
+
+@app.get("/v1/notifications")
+async def notifications_stream():
+    """SSE stream — pushes notification payloads as they fire."""
+    import json as _json
+
+    q: asyncio.Queue = asyncio.Queue(maxsize=50)
+    add_sse_client(q)
+
+    async def event_gen():
+        try:
+            yield "data: {\"type\": \"connected\"}\n\n"
+            while True:
+                payload = await q.get()
+                yield f"data: {_json.dumps(payload)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            remove_sse_client(q)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")

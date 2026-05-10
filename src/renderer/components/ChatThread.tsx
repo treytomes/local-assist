@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Button, Tag, Tooltip, Typography } from 'antd'
+import { useToast } from '../hooks/useToast'
 import { CopyOutlined, DeleteOutlined, RedoOutlined, RobotOutlined, SearchOutlined, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -211,6 +212,7 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
   const isUser = msg.role === 'user'
   const [pickerOpen, setPickerOpen] = useState(false)
   const groups = groupReactions(msg.reactions ?? [])
+  const toast = useToast()
 
   return (
     <div
@@ -444,7 +446,7 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
               type="text"
               size="small"
               icon={<CopyOutlined style={{ fontSize: 11 }} />}
-              onClick={() => navigator.clipboard.writeText(msg.content)}
+              onClick={() => navigator.clipboard.writeText(msg.content).then(() => toast.success('Copied'))}
               style={{ color: 'var(--vscode-text-muted)', padding: '0 2px', height: 18 }}
             />
           </Tooltip>

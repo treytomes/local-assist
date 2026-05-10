@@ -319,6 +319,40 @@ def get_drive_file(file_id: str) -> dict:
 
 
 @mcp.tool()
+def set_reminder(message: str, fire_at: str) -> dict:
+    """
+    Set a one-shot reminder that fires at a specific date and time.
+    Mara will proactively surface the message in the active conversation at that time.
+    Always call get_datetime first so you know the current time before constructing fire_at.
+    Reminders are in-memory only and lost if the app restarts before they fire.
+
+    Args:
+        message: The reminder message to surface when the alarm fires.
+        fire_at: ISO 8601 datetime when the reminder should fire (e.g. '2026-05-10T07:45:00').
+    """
+    from .events.watcher import get_registry
+    from .events.sources.alarm_watcher import make_alarm_watcher
+    from .database import save_watcher as _save_watcher, transaction
+    from datetime import datetime as _dt, timezone as _tz
+    try:
+        _fire_dt = _dt.fromisoformat(fire_at)
+        if _fire_dt.tzinfo is None:
+            _fire_dt = _fire_dt.astimezone()
+        if (_fire_dt - _dt.now(_tz.utc)).total_seconds() < 0:
+            return {"error": f"fire_at '{fire_at}' is in the past. Call get_datetime first to get the current time, then construct a future fire_at."}
+        watcher = make_alarm_watcher(message, fire_at)
+        registry = get_registry()
+        registry.register(watcher)
+        registry._start_watcher(watcher)
+        conn = shared_connection()
+        with transaction(conn):
+            _save_watcher(conn, watcher.id, watcher.source_type, watcher.name, watcher.description, watcher.fire_at)
+        return {"ok": True, "watcher_id": watcher.id, "message": message, "fire_at": watcher.fire_at}
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
 def react_to_message(message_id: str, emoji: str) -> dict:
     """
     Add an emoji reaction to a message in the conversation.

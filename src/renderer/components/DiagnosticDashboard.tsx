@@ -4,8 +4,11 @@ import {
   Button,
   Col,
   Divider,
+  Empty,
   Input,
   InputNumber,
+  List,
+  Popconfirm,
   Progress,
   Row,
   Select,
@@ -17,10 +20,13 @@ import {
 } from 'antd'
 import {
   ApiOutlined,
+  BellOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  DeleteOutlined,
   ReloadOutlined,
-  SendOutlined
+  SendOutlined,
+  WarningOutlined
 } from '@ant-design/icons'
 import { useAppStore } from '../store'
 import type { ApiResponse, HealthStatus, HttpMethod, PresetEndpoint } from '@shared/types'
@@ -167,6 +173,287 @@ function ProviderBadge({
   )
 }
 
+interface Watcher {
+  id: string
+  name: string
+  description: string
+  source_type: string
+  interval_seconds: number
+  enabled: boolean
+  one_shot: boolean
+  fire_at: string | null
+  last_run: string | null
+  last_error: string | null
+}
+
+// Decompose seconds into a value+unit pair for editing
+function secondsToUnit(s: number): { value: number; unit: 's' | 'm' | 'h' } {
+  if (s >= 3600 && s % 3600 === 0) return { value: s / 3600, unit: 'h' }
+  if (s >= 60 && s % 60 === 0) return { value: s / 60, unit: 'm' }
+  return { value: s, unit: 's' }
+}
+function unitToSeconds(value: number, unit: 's' | 'm' | 'h'): number {
+  if (unit === 'h') return value * 3600
+  if (unit === 'm') return value * 60
+  return value
+}
+
+function IntervalEditor({ watcher, backendUrl, onChange }: {
+  watcher: Watcher
+  backendUrl: string
+  onChange: (id: string, seconds: number) => void
+}): React.ReactElement {
+  const initial = secondsToUnit(watcher.interval_seconds)
+  const [value, setValue] = useState(initial.value)
+  const [unit, setUnit] = useState<'s' | 'm' | 'h'>(initial.unit)
+  const [saving, setSaving] = useState(false)
+
+  // Reset local state if the watcher interval changes externally
+  useEffect(() => {
+    const u = secondsToUnit(watcher.interval_seconds)
+    setValue(u.value)
+    setUnit(u.unit)
+  }, [watcher.interval_seconds])
+
+  async function save(): Promise<void> {
+    const seconds = unitToSeconds(value, unit)
+    if (seconds === watcher.interval_seconds) return
+    setSaving(true)
+    try {
+      await fetch(`${backendUrl}/v1/watchers/${watcher.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interval_seconds: seconds }),
+      })
+      onChange(watcher.id, seconds)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Space.Compact size="small">
+      <InputNumber
+        min={1}
+        max={unit === 'h' ? 24 : unit === 'm' ? 1440 : 86400}
+        value={value}
+        onChange={(v) => v != null && setValue(v)}
+        onBlur={save}
+        onPressEnter={save}
+        style={{ width: 56, fontSize: 11 }}
+        disabled={saving}
+      />
+      <Select
+        size="small"
+        value={unit}
+        onChange={(u) => setUnit(u)}
+        onBlur={save}
+        style={{ width: 52, fontSize: 11 }}
+        options={[
+          { label: 's', value: 's' },
+          { label: 'm', value: 'm' },
+          { label: 'h', value: 'h' },
+        ]}
+        disabled={saving}
+      />
+    </Space.Compact>
+  )
+}
+
+interface QuietHours {
+  enabled: boolean
+  start: string
+  end: string
+}
+
+function QuietHoursEditor({ backendUrl }: { backendUrl: string }): React.ReactElement {
+  const [qh, setQh] = useState<QuietHours>({ enabled: true, start: '21:00', end: '07:00' })
+
+  useEffect(() => {
+    fetch(`${backendUrl}/v1/quiet-hours`)
+      .then((r) => r.json())
+      .then(setQh)
+      .catch(() => {})
+  }, [backendUrl])
+
+  async function save(next: QuietHours): Promise<void> {
+    setQh(next)
+    await fetch(`${backendUrl}/v1/quiet-hours`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(next),
+    }).catch(() => {})
+  }
+
+  return (
+    <div style={{
+      padding: '10px 12px',
+      marginBottom: 16,
+      background: 'var(--vscode-bg)',
+      border: '1px solid var(--vscode-border)',
+      borderRadius: 6,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, flex: 1 }}>
+          Quiet Hours
+        </Text>
+        <Switch
+          size="small"
+          checked={qh.enabled}
+          onChange={(v) => save({ ...qh, enabled: v })}
+          checkedChildren="On"
+          unCheckedChildren="Off"
+        />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>From</Text>
+        <Input
+          size="small"
+          type="time"
+          value={qh.start}
+          onChange={(e) => setQh((prev) => ({ ...prev, start: e.target.value }))}
+          onBlur={() => save(qh)}
+          style={{ width: 100, fontSize: 12, background: 'var(--vscode-surface)', color: 'var(--vscode-text)', borderColor: 'var(--vscode-border)' }}
+          disabled={!qh.enabled}
+        />
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>to</Text>
+        <Input
+          size="small"
+          type="time"
+          value={qh.end}
+          onChange={(e) => setQh((prev) => ({ ...prev, end: e.target.value }))}
+          onBlur={() => save(qh)}
+          style={{ width: 100, fontSize: 12, background: 'var(--vscode-surface)', color: 'var(--vscode-text)', borderColor: 'var(--vscode-border)' }}
+          disabled={!qh.enabled}
+        />
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+          (notifications suppressed)
+        </Text>
+      </div>
+    </div>
+  )
+}
+
+function WatchersPanel({ backendUrl }: { backendUrl: string }): React.ReactElement {
+  const [watchers, setWatchers] = useState<Watcher[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const fetchWatchers = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`${backendUrl}/v1/watchers`)
+      setWatchers(await res.json())
+    } catch {
+      // non-fatal
+    } finally {
+      setLoading(false)
+    }
+  }, [backendUrl])
+
+  // Fetch on mount and poll every 10 seconds so newly created/fired alarms appear promptly
+  useEffect(() => {
+    fetchWatchers()
+    const id = setInterval(fetchWatchers, 10_000)
+    return () => clearInterval(id)
+  }, [fetchWatchers])
+
+  async function toggleEnabled(w: Watcher): Promise<void> {
+    await fetch(`${backendUrl}/v1/watchers/${w.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !w.enabled }),
+    })
+    setWatchers((prev) => prev.map((x) => x.id === w.id ? { ...x, enabled: !w.enabled } : x))
+  }
+
+  async function deleteWatcher(w: Watcher): Promise<void> {
+    await fetch(`${backendUrl}/v1/watchers/${w.id}`, { method: 'DELETE' })
+    setWatchers((prev) => prev.filter((x) => x.id !== w.id))
+  }
+
+  function handleIntervalChange(id: string, seconds: number): void {
+    setWatchers((prev) => prev.map((x) => x.id === id ? { ...x, interval_seconds: seconds } : x))
+  }
+
+
+  if (!loading && watchers.length === 0) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Empty description={<Text style={{ color: 'var(--vscode-text-muted)' }}>No watchers registered</Text>} />
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: 16, overflowY: 'auto', height: '100%' }}>
+      <QuietHoursEditor backendUrl={backendUrl} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>
+          Active Watchers
+        </Text>
+        <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={fetchWatchers} style={{ fontSize: 11 }} />
+      </div>
+      <List
+        dataSource={watchers}
+        loading={loading}
+        renderItem={(w) => (
+          <List.Item
+            style={{ padding: '8px 0', borderBottom: '1px solid var(--vscode-border)' }}
+            actions={[
+              <Switch
+                key="toggle"
+                size="small"
+                checked={w.enabled}
+                onChange={() => toggleEnabled(w)}
+                checkedChildren="On"
+                unCheckedChildren="Off"
+              />,
+              <Popconfirm
+                key="delete"
+                title="Remove this watcher?"
+                onConfirm={() => deleteWatcher(w)}
+                okText="Remove"
+                cancelText="Cancel"
+              >
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              </Popconfirm>,
+            ]}
+          >
+            <List.Item.Meta
+              title={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <BellOutlined style={{ color: w.enabled ? 'var(--vscode-accent)' : 'var(--vscode-text-muted)', fontSize: 13 }} />
+                  <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>{w.name}</Text>
+                  {w.fire_at
+                    ? <Tag color="purple" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>fires {new Date(w.fire_at).toLocaleTimeString()}</Tag>
+                    : <IntervalEditor watcher={w} backendUrl={backendUrl} onChange={handleIntervalChange} />
+                  }
+                </div>
+              }
+              description={
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>{w.description}</Text>
+                  {w.last_error && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <WarningOutlined style={{ color: 'var(--vscode-error)', fontSize: 11 }} />
+                      <Text style={{ color: 'var(--vscode-error)', fontSize: 11 }}>{w.last_error}</Text>
+                    </div>
+                  )}
+                  {w.last_run && !w.last_error && (
+                    <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+                      Last run: {new Date(w.last_run).toLocaleTimeString()}
+                    </Text>
+                  )}
+                </div>
+              }
+            />
+          </List.Item>
+        )}
+      />
+    </div>
+  )
+}
+
 export default function DiagnosticDashboard(): React.ReactElement {
   const {
     backendUrl,
@@ -179,7 +466,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
     setBackendUrl
   } = useAppStore()
 
-  const [activeTab, setActiveTab] = useState<'status' | 'cost'>('status')
+  const [activeTab, setActiveTab] = useState<'status' | 'cost' | 'watchers'>('status')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const autoRefreshRef = useRef(autoRefresh)
   autoRefreshRef.current = autoRefresh
@@ -649,7 +936,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
 
       {/* Tab bar */}
       <div style={{ display: 'flex', gap: 0, background: 'var(--vscode-surface)', borderBottom: '1px solid var(--vscode-border)', flexShrink: 0, padding: '0 16px' }}>
-        {(['status', 'cost'] as const).map((tab) => (
+        {(['status', 'cost', 'watchers'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -670,12 +957,15 @@ export default function DiagnosticDashboard(): React.ReactElement {
         ))}
       </div>
 
-      {/* Tab panes — both mounted, only active one visible */}
+      {/* Tab panes — all mounted, only active one visible */}
       <div style={{ flex: 1, overflow: 'hidden', display: activeTab === 'status' ? 'flex' : 'none', flexDirection: 'column' }}>
         {statusContent}
       </div>
       <div style={{ flex: 1, overflow: 'hidden', display: activeTab === 'cost' ? 'flex' : 'none', flexDirection: 'column' }}>
         <CostDashboard />
+      </div>
+      <div style={{ flex: 1, overflow: 'hidden', display: activeTab === 'watchers' ? 'flex' : 'none', flexDirection: 'column' }}>
+        <WatchersPanel backendUrl={backendUrl} />
       </div>
     </div>
   )

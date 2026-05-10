@@ -72,7 +72,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] Scaffold `src/backend/` FastAPI app
 - [x] `/v1/chat/completions` — OpenAI-compatible, streams tokens, records usage
 - [x] `/v1/health` — Azure reachability check (drives Ollama fallback)
-- [x] SQLite schema: `conversations`, `messages`, `usage`, `pricing`, `embeddings`
+- [x] SQLite schema: `conversations`, `messages`, `usage`, `pricing`, `embeddings`, `reactions`, `google_tokens`, `watchers`, `settings`
 - [x] `/v1/usage` — cost summary (per conversation, daily, by model)
 - [x] `/v1/pricing` — list/fetch/upsert pricing rows
 - [x] Pricing seed: deployed models with verified retail rates
@@ -231,28 +231,48 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] All markdown links and citation card links route through `shell.openExternal` — prevents Google Docs and other URLs from taking over the Electron window
 - [x] Right-panel cost/token totals now fetch cumulative `GET /v1/usage/:id` after each turn instead of displaying single-turn values from the SSE `done` event
 
-### M7 — Event-driven notifications
+### M7 — Event-driven notifications ✅
 **Goal:** Mara can be proactively triggered by external events and respond without user prompting.
 
-- [ ] Define event source abstraction: polling interval, webhook listener, or filesystem watch
-- [ ] Initial event sources to consider: calendar reminders, system alerts (high CPU/RAM), scheduled check-ins
-- [ ] Event queue: buffer incoming events, deduplicate, throttle
-- [ ] Notification surface: tray badge + toast; optionally open chat with pre-populated context
-- [ ] Mara response loop: inject event as a system message, allow tool use, surface reply as notification or in thread
-- [ ] User controls: per-source enable/disable, quiet hours, priority threshold
+- [x] In-app toast notification system (`useToast` hook wrapping Ant Design `App.useApp()`; `<AntApp>` wrapper in App.tsx; copy confirmation, error/warning toasts wired into ChatView and ChatThread)
+- [x] Event source abstraction: `Watcher` dataclass with pluggable `_poll_fn`, configurable `interval_seconds`, `enabled` flag, `last_run` / `last_error` tracking; `WatcherRegistry` singleton with asyncio poll tasks and shared `Queue[EventItem]`
+- [x] Initial event sources:
+  - **Calendar reminders** — polls Google Calendar every 2 min for events starting within 30 min; session-level dedup via `_announced` set
+  - **System resource alerts** — checks CPU ≥ 90% and RAM ≥ 90% every 60 s; 5-minute per-resource cooldown (via `psutil`)
+  - **Scheduled check-ins** — fires every 4 hours; `enabled=False` by default (opt-in)
+- [x] Event queue: `asyncio.Queue` shared across all watchers; events emitted with `EventItem` (id, watcher_id, title, body, fired_at, optional conversation_id)
+- [x] Response loop: queue drain → SSE push to all `/v1/notifications` clients → `NotificationListener` (frontend) calls `POST /v1/events/handle` with active conversation context → Mara generates reply → reply persisted to the active conversation (or a newly created one if none is open)
+- [x] `POST /v1/events/handle` — receives event payload + active `conversation_id`; loads conversation history; injects event as a synthetic user turn (invisible to the user; not persisted); generates and persists only the assistant reply
+- [x] Notification surface: SSE stream at `GET /v1/notifications`; `NotificationListener` component in App.tsx subscribes; on event fires an Ant Design `notification.info` toast (`bottomRight`, 10 s) and appends Mara's reply to the active conversation
+- [x] REST API:
+  - `GET /v1/watchers` — list all registered watchers
+  - `PATCH /v1/watchers/{id}` — toggle `enabled`, change `interval_seconds` (persisted to `settings` table), or update alarm enabled state
+  - `DELETE /v1/watchers/{id}` — remove watcher and cancel its asyncio task
+- [x] Diagnostics **Watchers tab** — lists all active watchers; built-in watchers show an inline interval editor (number + unit dropdown, saves on blur/Enter); alarm watchers show fire time; enable/disable switch; delete with confirmation; 10-second auto-refresh
+- [x] **`set_reminder` tool** (MCP + TOOLS registry) — Mara can create one-shot alarm watchers at a user-specified time; server validates `fire_at` is in the future (rejects past dates with an error directing Mara to call `get_datetime` first); tool available in both MCP server and chat tool-use loop
+- [x] Alarm watcher persistence: `watchers` table in SQLite; pending alarms restored on restart; self-deleted from DB when fired or manually removed via delete hook
+- [x] `tools_used` column in `messages` table — tool invocation metadata (tool name, query, results, weather, reaction) persisted as JSON; deserialized and returned with `GET /v1/conversations/{id}` so tool-call indicators survive conversation reload
+- [x] Watcher poll intervals persisted in `settings` key/value table (`watcher_interval.<source_type>`); loaded at startup so interval changes survive restarts
+- [x] Backend logging to disk: uvicorn output tee'd to `~/.config/local-assist/logs/backend.log` in dev mode; timestamped write stream in production (`spawnBackend`)
+- [x] **Spend threshold watcher** (`cost_watcher.py`) — polls every 5 min; fires when all-time cost crosses the configured alert threshold (re-fires at each additional multiple); threshold synced from frontend to `settings.cost_alert_threshold` via `PUT /v1/settings/cost-alert` on every change in CostDashboard
+- [x] **Quiet hours** — `GET/PUT /v1/quiet-hours` backed by `settings` table; default 9 PM–7 AM, enabled by default; response loop checks before pushing SSE events and drops silently during the window; configurable from the **Watchers tab** (toggle + time-range pickers above the watcher list)
 
-#### Notes for Claude
-
-- Any events or loops that Mara is watching will need to end up on the Diagnostics screen so we can keep an eye on them, and possible delete the ones we don't want.
-
-### M8 — Speech I/O
-**Goal:** Voice in, voice out via Azure.
+### M8 — Speech I/O + Procedural Sound
+**Goal:** Voice in, voice out via Azure; Mara can generate and play sounds on demand.
 
 - [ ] STT: stream mic audio → Azure `gpt-4o-transcribe` → text
 - [ ] TTS: assistant reply → Azure `gpt-4o-mini-tts` → audio playback
 - [ ] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings
 - [ ] IPC: `start-listening`, `stop-listening`, `speak`, `stop-speaking`
 - [ ] Push-to-talk mode (hold key) and continuous mode toggle
+
+#### Procedural sound engine
+- [ ] Port the bfxr algorithm to TypeScript — single-oscillator synth (square / sawtooth / sine / triangle / noise / breaker wave types) with ADSR envelope, frequency start/slide/delta, vibrato, arpeggio, duty cycle, flanger, and lo/hi-pass filters; runs entirely in Web Audio API, no dependencies
+- [ ] Named preset library: `"coin"`, `"laser"`, `"powerup"`, `"blip"`, `"explosion"`, `"dial-up"` (multi-tone chirp sequence), `"startup"`
+- [ ] `play_sound` tool — Mara can call with a preset name **or** a raw bfxr parameter object; tool result triggers playback in the renderer (first tool with a renderer-side effect rather than a data return)
+- [ ] Each preset and custom sound has a text description (e.g. `"retro coin pickup, bright and short"`, `"sci-fi laser shot with downward slide"`); stored alongside the bfxr parameters; searchable via sqlite-vec cosine similarity so Mara can call `search_sounds("something triumphant")` and get semantically relevant results
+- [ ] `search_sounds` tool — semantic search over the sound library by description; returns matching preset names and parameters
+- [ ] **Sound Lab tab** (alongside Tokenizer and Diagnostics) — browse the full preset library with descriptions; click any sound to preview it; edit description and parameters; add custom sounds; delete user-created entries; live parameter sliders with instant preview for the bfxr parameter set
 
 ### M9 — Vision
 **Goal:** Send images, get analysis back.
@@ -264,7 +284,6 @@ Tavily Search API — free tier (1k calls/month) for development.
 ### M10 — Polish + packaging
 **Goal:** Installable app.
 
-- [ ] In-app toast notification system (copy confirmation, non-fatal errors, tool completion feedback)
 - [ ] System tray icon with quick-ask popup
 - [ ] Global hotkey to open/focus window
 - [ ] Bundle `.venv` via electron-builder `extraResources`; validate `sqlite-vec` native extension
@@ -274,7 +293,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 ### Future Exploration
 - Custom web search crawler (no Tavily dependency): direct HTTP fetch + HTML extraction; good candidates are sites with structured data or public APIs (Wikipedia, Stack Overflow). Stack Overflow's API could also support writing answers back to the community.
 - GCP billing visibility: Google's Cloud Billing API exposes only account metadata and budget alerts — credit balance and amount owed are not available programmatically. Real-time spend data requires enabling **BigQuery billing export** (Console → Billing → Data export), which streams all spend into a queryable dataset with ~1-day lag. If added, this would be a `query_gcp_costs` tool backed by the BigQuery API.
-
+- **Deferred tool schemas**: as the tool count grows, sending all 26+ full tool definitions on every request wastes context tokens and increases selection error risk. Explore sending only tool names + one-line descriptions by default, with a `get_tool_schema(name)` meta-tool Mara can call to fetch the full parameter definition before invoking an unfamiliar tool. Net effect: lower per-request token cost, cleaner active context. Open question is whether Mistral Large 3 reliably recognizes when it needs to fetch a schema vs. guessing — worth benchmarking once the tool count crosses ~30.
 ---
 
 ## Project Structure
@@ -312,6 +331,15 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   ├── providers/
 │   │   │   ├── azure.py           ✓ streaming + tool call support
 │   │   │   └── ollama.py          ✓ streaming + tool call support
+│   │   ├── events/                # M7 event-driven notification system
+│   │   │   ├── watcher.py         ✓ WatcherRegistry, Watcher, EventItem; one-shot + interval modes
+│   │   │   ├── response_loop.py   ✓ queue drain → SSE push
+│   │   │   └── sources/
+│   │   │       ├── calendar_watcher.py  ✓ Google Calendar reminders (30-min lookahead)
+│   │   │       ├── system_watcher.py    ✓ CPU/RAM threshold alerts (psutil)
+│   │   │       ├── schedule_watcher.py  ✓ periodic check-ins (4h, opt-in)
+│   │   │       ├── alarm_watcher.py     ✓ one-shot datetime alarms (set_reminder tool)
+│   │   │       └── cost_watcher.py      ✓ spend threshold alerts (synced from CostDashboard)
 │   │   └── tools/
 │   │       ├── datetime_tool.py   ✓ current date/time/timezone
 │   │       ├── system_info_tool.py ✓ CPU/RAM/GPU/OS snapshot

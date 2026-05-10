@@ -25,6 +25,7 @@ The backend doubles as an MCP server. Mara can call tools mid-conversation:
 - **list_calendars / get_calendar_events / create_calendar_event / update_calendar_event / delete_calendar_event** — Google Calendar full read/write (requires OAuth)
 - **list_task_lists / get_tasks / create_task / complete_task / update_task / delete_task** — Google Tasks across all lists (requires OAuth)
 - **search_drive / get_drive_file** — Google Drive read-only search and plain-text file preview (requires OAuth)
+- **set_reminder** — set a one-shot timed reminder; Mara will proactively surface the message in the active conversation at the specified time; persisted across restarts
 
 The available tool list is served dynamically from `GET /v1/tools` — the Context Inspector always reflects the live set without any hardcoded frontend mirror.
 
@@ -62,6 +63,22 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - Reactions are grouped below each bubble with counts; click to toggle your own reaction off
 - Reactions are injected into Mara's context before every turn so she can see and respond to them
 - RAG-retrieved chunks include reaction summaries so past emotional signals carry forward
+
+### Event-Driven Notifications
+Mara can be proactively triggered by external events and respond without user prompting:
+- **Calendar reminders** — polls Google Calendar every 2 minutes; fires a reminder ~30 minutes before any upcoming event (requires Google OAuth)
+- **System resource alerts** — monitors CPU and RAM via `psutil`; alerts when either exceeds 90% (5-minute cooldown per resource)
+- **Scheduled check-ins** — periodic check-in every 4 hours (opt-in, disabled by default)
+- **One-shot alarms** — Mara can set timed reminders via the `set_reminder` tool; alarms persist across restarts and self-delete after firing
+- **Spend threshold alerts** — fires when all-time cost crosses the alert threshold configured in the Cost Dashboard; re-fires at each additional multiple
+
+When an event fires, Mara generates a reply in the context of the active conversation (or creates a new one) and surfaces it as an in-app notification toast (`bottomRight`).
+
+All active watchers are listed in the **Diagnostics → Watchers tab**. Built-in watcher poll intervals are editable inline (number + unit, saved on blur); alarm watchers show their fire time. Each watcher has an enable/disable toggle and a delete button. Interval changes persist across restarts.
+
+**Quiet hours** — notifications can be suppressed during a configurable time window (default 9 PM – 7 AM). Toggle and time-range pickers are at the top of the Watchers tab; settings persist across restarts.
+
+The `GET /v1/notifications` SSE endpoint streams notification payloads to all connected clients in real time.
 
 ### Cost Tracking
 - Token usage and USD cost recorded per message; right panel shows **cumulative** conversation totals
@@ -177,14 +194,14 @@ src/
     ├── main.py        # Routes + tool-use loop
     ├── mcp_server.py  # MCP tool definitions
     ├── providers/     # Azure + Ollama adapters
-    └── tools/         # datetime, system_info, location, weather, memory, tokenizer
+    ├── events/        # Watcher registry, response loop, event sources
+    └── tools/         # datetime, system_info, location, weather, memory, tokenizer, google
 ```
 
 ---
 
 ## Roadmap
 
-- **M7** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events; event sources visible and manageable in Diagnostics
-- **M8** — Voice I/O: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`
+- **M8** — Speech I/O + Procedural Sound: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`; bfxr-inspired procedural sound engine with `play_sound` / `search_sounds` tools and a Sound Lab tab
 - **M9** — Vision: image attach and screenshot capture
-- **M10** — Polish + packaging: toast notifications, system tray, AppImage / NSIS + auto-update
+- **M10** — Polish + packaging: system tray, global hotkey, AppImage / NSIS + auto-update

@@ -118,6 +118,16 @@ export default function CostDashboard(): React.ReactElement {
 
   useEffect(() => { fetchData() }, [fetchData])
 
+  // Sync threshold to backend so the cost watcher can read it
+  useEffect(() => {
+    if (!backendUrl) return
+    fetch(`${backendUrl}/v1/settings/cost-alert`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threshold: costAlertThreshold }),
+    }).catch(() => {})
+  }, [backendUrl, costAlertThreshold])
+
   const chartData = toDailyChart(daily)
   const totalCost = models.reduce((s, r) => s + r.total_cost, 0)
   const totalTokens = models.reduce((s, r) => s + r.total_prompt_tokens + r.total_completion_tokens, 0)
@@ -289,7 +299,8 @@ export default function CostDashboard(): React.ReactElement {
               <Tooltip
                 contentStyle={{ background: 'var(--vscode-surface)', border: '1px solid var(--vscode-border)', borderRadius: 4, fontSize: 12 }}
                 labelStyle={{ color: 'var(--vscode-text-muted)' }}
-                formatter={(v: number) => [fmt(v), 'Cost']}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                formatter={((v: number) => [fmt(v), 'Cost']) as any}
               />
               <Area
                 type="monotone"

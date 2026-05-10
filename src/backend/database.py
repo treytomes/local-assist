@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS messages (
     role            TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
     content         TEXT NOT NULL,
     model           TEXT,
+    tools_used      TEXT,
     timestamp       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -111,11 +112,28 @@ CREATE TABLE IF NOT EXISTS google_tokens (
     updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS watchers (
+    id          TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL DEFAULT 'alarm',
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    fire_at     TEXT NOT NULL,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_conversation    ON usage(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp       ON usage(timestamp);
 CREATE INDEX IF NOT EXISTS idx_search_calls_date     ON search_calls(called_at);
 CREATE INDEX IF NOT EXISTS idx_reactions_message     ON reactions(message_id);
+CREATE INDEX IF NOT EXISTS idx_watchers_fire_at      ON watchers(fire_at);
 """
 
 
@@ -133,6 +151,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     msg_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
     if "model" not in msg_cols:
         conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+    if "tools_used" not in msg_cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN tools_used TEXT")
 
     mem_tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")}
     if mem_tables:
@@ -201,20 +221,40 @@ def delete_conversation(conn: sqlite3.Connection, conv_id: str) -> None:
 
 # --- Messages ---
 
-def insert_message(conn: sqlite3.Connection, msg_id: str, conv_id: str, role: str, content: str, model: str | None = None) -> sqlite3.Row:
+def insert_message(
+    conn: sqlite3.Connection,
+    msg_id: str,
+    conv_id: str,
+    role: str,
+    content: str,
+    model: str | None = None,
+    tools_used: list | None = None,
+) -> sqlite3.Row:
+    import json as _json
     conn.execute(
-        "INSERT INTO messages (id, conversation_id, role, content, model) VALUES (?, ?, ?, ?, ?)",
-        (msg_id, conv_id, role, content, model),
+        "INSERT INTO messages (id, conversation_id, role, content, model, tools_used) VALUES (?, ?, ?, ?, ?, ?)",
+        (msg_id, conv_id, role, content, model, _json.dumps(tools_used) if tools_used else None),
     )
     touch_conversation(conn, conv_id)
     return conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
 
 
-def get_messages(conn: sqlite3.Connection, conv_id: str) -> list[sqlite3.Row]:
-    return conn.execute(
+def get_messages(conn: sqlite3.Connection, conv_id: str) -> list[dict]:
+    import json as _json
+    rows = conn.execute(
         "SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC",
         (conv_id,),
     ).fetchall()
+    result = []
+    for row in rows:
+        d = dict(row)
+        if d.get("tools_used"):
+            try:
+                d["tools_used"] = _json.loads(d["tools_used"])
+            except Exception:
+                d["tools_used"] = None
+        result.append(d)
+    return result
 
 
 def delete_message(conn: sqlite3.Connection, msg_id: str) -> bool:
@@ -296,3 +336,49 @@ def upsert_google_tokens(
 
 def delete_google_tokens(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM google_tokens WHERE id = 1")
+
+
+# --- Persisted watchers (alarm-type only) ---
+
+def save_watcher(conn, watcher_id: str, source_type: str, name: str, description: str, fire_at: str, enabled: bool = True) -> None:
+    conn.execute(
+        """
+        INSERT INTO watchers (id, source_type, name, description, fire_at, enabled)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            name        = excluded.name,
+            description = excluded.description,
+            fire_at     = excluded.fire_at,
+            enabled     = excluded.enabled
+        """,
+        (watcher_id, source_type, name, description, fire_at, int(enabled)),
+    )
+
+
+def delete_watcher_row(conn, watcher_id: str) -> None:
+    conn.execute("DELETE FROM watchers WHERE id = ?", (watcher_id,))
+
+
+def load_pending_watchers(conn) -> list[sqlite3.Row]:
+    """Return all persisted watchers whose fire_at is in the future."""
+    return conn.execute(
+        "SELECT * FROM watchers WHERE fire_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ORDER BY fire_at ASC"
+    ).fetchall()
+
+
+# --- Settings ---
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        """,
+        (key, value),
+    )

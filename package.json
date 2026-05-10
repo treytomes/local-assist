@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently --names \"backend,electron\" --prefix-colors \"cyan,yellow\" --kill-others \"npm run dev:backend\" \"npm run dev:electron\"",
-    "dev:backend": ".venv/bin/python -m uvicorn src.backend.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:backend": "mkdir -p ~/.config/local-assist/logs && .venv/bin/python -m uvicorn src.backend.main:app --reload --host 127.0.0.1 --port 8000 --log-level debug 2>&1 | tee -a ~/.config/local-assist/logs/backend.log",
     "dev:electron": "ELECTRON_RUN_AS_NODE= electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",

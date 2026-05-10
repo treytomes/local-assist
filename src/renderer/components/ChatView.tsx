@@ -9,6 +9,7 @@ import ConversationList from './ConversationList'
 import ChatThread from './ChatThread'
 import MessageComposer from './MessageComposer'
 import RightPanel from './RightPanel'
+import { useToast } from '../hooks/useToast'
 import type { Conversation, Message, ModelId, Reaction } from '@shared/types'
 
 const { Text } = Typography
@@ -35,6 +36,7 @@ export default function ChatView(): React.ReactElement {
     modelParams
   } = useAppStore()
 
+  const toast = useToast()
   const [streaming, setStreaming] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const streamingMsgIdRef = useRef<string | null>(null)
@@ -194,6 +196,7 @@ export default function ChatView(): React.ReactElement {
                   content: `[Error: ${evt.message ?? 'unknown error'}]`,
                   streaming: false
                 })
+                toast.error(evt.message ?? 'An error occurred')
                 return
               } else if (evt.type === 'delta' && evt.content) {
                 accumulatedContent += evt.content
@@ -267,6 +270,7 @@ export default function ChatView(): React.ReactElement {
             content: '[Error: failed to reach backend]',
             streaming: false
           })
+          toast.error('Could not reach the backend — is it running?')
         }
       } finally {
         const finalMsgId = streamingMsgIdRef.current ?? assistantMsgId
