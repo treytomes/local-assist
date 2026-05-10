@@ -19,19 +19,19 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
-def set_shared_connection(conn: sqlite3.Connection) -> None:
+def set_shared_connection(conn) -> None:
     global _shared_conn
     _shared_conn = conn
 
 
-def shared_connection() -> sqlite3.Connection:
+def shared_connection():
     if _shared_conn is None:
         raise RuntimeError("Database connection not initialised yet")
     return _shared_conn
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection):
+def transaction(conn):
     try:
         yield conn
         conn.commit()

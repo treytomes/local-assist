@@ -219,7 +219,17 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] `tools/google.py` — Google API client wrapper (`google-api-python-client` + `google-auth-oauthlib`)
 - [x] Tool invocations shown inline: 📅 calendar labels, ✅ task labels, 📁 Drive labels
 - [x] Google tools listed in Context Inspector via `/v1/tools` (automatic)
-- [x] `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` placeholders added to `.env`
+- [x] `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` populated in `.env` (project `local-assist-495822`)
+
+#### Post-M6 fixes
+- [x] OAuth loopback server: teardown stale server before rebinding on retry; `allow_reuse_address = True`; PKCE verifier preserved by reusing the same `Flow` object through the exchange
+- [x] Token exchange moved to `run_in_executor` (was blocking the event loop); errors now logged instead of silently swallowed
+- [x] SQLite thread-safety: `_LockedConn` proxy serialises all `execute`/`commit`/`rollback` calls through a `threading.Lock`; both `conn()` endpoints and `shared_connection()` (MCP) go through the proxy — eliminates `SQLITE_MISUSE` under concurrent requests
+- [x] Multi-round tool loop: tool-use loop runs up to 5 rounds (was 1); allows Mara to fetch IDs in one round then act on them (update/delete) in the next
+- [x] Tool descriptions: `update_calendar_event`, `delete_calendar_event`, `complete_task`, `update_task`, `delete_task` — all explicitly state "call the fetch tool first to obtain the real ID; never guess"
+- [x] `list_task_lists` / `get_tasks` descriptions updated: tasks have no server-side search; Mara must fetch all lists and match by substring
+- [x] All markdown links and citation card links route through `shell.openExternal` — prevents Google Docs and other URLs from taking over the Electron window
+- [x] Right-panel cost/token totals now fetch cumulative `GET /v1/usage/:id` after each turn instead of displaying single-turn values from the SSE `done` event
 
 ### M7 — Event-driven notifications
 **Goal:** Mara can be proactively triggered by external events and respond without user prompting.
@@ -263,6 +273,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 
 ### Future Exploration
 - Custom web search crawler (no Tavily dependency): direct HTTP fetch + HTML extraction; good candidates are sites with structured data or public APIs (Wikipedia, Stack Overflow). Stack Overflow's API could also support writing answers back to the community.
+- GCP billing visibility: Google's Cloud Billing API exposes only account metadata and budget alerts — credit balance and amount owed are not available programmatically. Real-time spend data requires enabling **BigQuery billing export** (Console → Billing → Data export), which streams all spend into a queryable dataset with ~1-day lag. If added, this would be a `query_gcp_costs` tool backed by the BigQuery API.
 
 ---
 
@@ -289,9 +300,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   ├── electron.d.ts          ✓ window.electronAPI types
 │   │   └── App.tsx                ✓ AntD ConfigProvider + tabbed shell
 │   ├── main/
-│   │   ├── index.ts               ✓ Electron main + IPC + sidecar spawn
-│   │   ├── audio.ts               # TTS/STT bridge (M5)
-│   │   └── google-auth.ts         # OAuth flow (M7)
+│   │   └── index.ts               ✓ Electron main + IPC + sidecar spawn + open-external handler
 │   ├── preload/index.ts           ✓ contextBridge → window.electronAPI
 │   ├── backend/                   # FastAPI sidecar (Python)
 │   │   ├── main.py                ✓ routes, tool-use loop, MCP mount
@@ -311,7 +320,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │       ├── memory_tool.py     ✓ knowledge graph CRUD + vector search
 │   │       ├── tokenizer_tool.py  ✓ Tekken v3 tokenizer
 │   │       ├── search.py          ✓ Tavily web search + quota tracking
-│   │       └── google.py          # Calendar / Tasks / Drive (M7)
+│   │       └── google.py          ✓ Calendar / Tasks / Drive (M6)
 │   └── shared/types.ts            ✓ Conversation, Message, ModelId, etc.
 ├── .env
 ├── package.json                   ✓

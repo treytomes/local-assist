@@ -235,11 +235,14 @@ export default function ChatView(): React.ReactElement {
                   provider: evt.provider,
                   tools_used: evt.tools_used ?? []
                 })
-                setConvUsage(convId!, {
-                  total_cost_usd: evt.usage.cost_usd,
-                  prompt_tokens: evt.usage.prompt_tokens,
-                  completion_tokens: evt.usage.completion_tokens
-                })
+                fetch(`${backendUrl}/v1/usage/${convId}`)
+                  .then((r) => r.json())
+                  .then((data) => {
+                    if (data && typeof data.total_cost_usd === 'number') {
+                      setConvUsage(convId!, data)
+                    }
+                  })
+                  .catch(console.error)
                 // Auto-title: use first 60 chars of first user message
                 const msgs = messagesByConv[convId!] ?? []
                 const firstUser = msgs.find((m) => m.role === 'user')

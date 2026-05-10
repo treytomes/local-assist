@@ -309,6 +309,20 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
+            components={{
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    if (href) window.electronAPI.openExternal(href)
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {children}
+                </a>
+              )
+            }}
           >
             {msg.content}
           </ReactMarkdown>
@@ -325,8 +339,7 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
                 <a
                   key={ri}
                   href={r.url}
-                  target="_blank"
-                  rel="noreferrer"
+                  onClick={(e) => { e.preventDefault(); window.electronAPI.openExternal(r.url) }}
                   style={{ textDecoration: 'none', display: 'block', flex: '1 1 200px', maxWidth: 280 }}
                 >
                   <div style={{

@@ -1,5 +1,7 @@
+import sqlite3
 import uuid
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -59,14 +61,16 @@ CONTEXT_WINDOW = 20  # default rolling message depth sent to model
 # --- App lifecycle ---
 
 _conn = None
+_db_lock = threading.Lock()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _conn
-    _conn = get_connection()
-    init_db(_conn)
-    seed_pricing(_conn)
+    raw = get_connection()
+    init_db(raw)
+    seed_pricing(raw)
+    _conn = _LockedConn(raw, _db_lock)
     set_shared_connection(_conn)
     yield
     if _conn:
@@ -306,7 +310,7 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "update_calendar_event",
-        "description": "Update fields on an existing Google Calendar event.",
+        "description": "Update fields on an existing Google Calendar event. You must call get_calendar_events first to obtain the real event_id — never guess or invent one.",
         "parameters": {"type": "object", "properties": {
             "event_id": {"type": "string", "description": "Event ID from get_calendar_events."},
             "calendar_id": {"type": "string", "description": "Calendar ID (default 'primary')."},
@@ -316,7 +320,7 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "delete_calendar_event",
-        "description": "Delete a Google Calendar event.",
+        "description": "Delete a Google Calendar event. You must call get_calendar_events first to obtain the real event_id — never guess or invent one.",
         "parameters": {"type": "object", "properties": {
             "event_id": {"type": "string", "description": "Event ID from get_calendar_events."},
             "calendar_id": {"type": "string", "description": "Calendar ID (default 'primary')."},
@@ -325,12 +329,12 @@ TOOLS: list[dict] = [
     # --- Google Tasks ---
     {"type": "function", "function": {
         "name": "list_task_lists",
-        "description": "List all Google Task lists. Call this to find the right task_list_id before operating on tasks.",
+        "description": "List all Google Task lists. When searching for a specific task by name, always call this first and then call get_tasks on every list — tasks may be in any list, not just the default.",
         "parameters": {"type": "object", "properties": {}, "required": []},
     }},
     {"type": "function", "function": {
         "name": "get_tasks",
-        "description": "Get tasks from a Google Tasks list.",
+        "description": "Get tasks from a Google Tasks list. There is no server-side search — to find a task by name, fetch all lists via list_task_lists and call get_tasks on each one, then match by substring.",
         "parameters": {"type": "object", "properties": {
             "task_list_id": {"type": "string", "description": "Task list ID (default '@default' = My Tasks)."},
             "show_completed": {"type": "boolean", "description": "Include completed tasks (default false)."},
@@ -348,7 +352,7 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "complete_task",
-        "description": "Mark a Google Task as completed.",
+        "description": "Mark a Google Task as completed. You must call get_tasks first to obtain the real task_id — never guess or invent one.",
         "parameters": {"type": "object", "properties": {
             "task_id": {"type": "string", "description": "Task ID from get_tasks."},
             "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
@@ -356,7 +360,7 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "update_task",
-        "description": "Update the title, notes, or due date of a Google Task.",
+        "description": "Update the title, notes, or due date of a Google Task. You must call get_tasks first to obtain the real task_id — never guess or invent one.",
         "parameters": {"type": "object", "properties": {
             "task_id": {"type": "string", "description": "Task ID from get_tasks."},
             "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
@@ -365,7 +369,7 @@ TOOLS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "delete_task",
-        "description": "Delete a task from a Google Tasks list.",
+        "description": "Delete a task from a Google Tasks list. You must call get_tasks first to obtain the real task_id — never guess or invent one.",
         "parameters": {"type": "object", "properties": {
             "task_id": {"type": "string", "description": "Task ID from get_tasks."},
             "task_list_id": {"type": "string", "description": "Task list ID (default '@default')."},
@@ -595,6 +599,36 @@ def conn():
     return _conn
 
 
+class _LockedConn:
+    """Thin proxy that serializes all sqlite3 calls through a shared lock."""
+
+    def __init__(self, connection: sqlite3.Connection, lock: threading.Lock):
+        self._conn = connection
+        self._lock = lock
+
+    def execute(self, sql, parameters=()):
+        with self._lock:
+            return self._conn.execute(sql, parameters)
+
+    def executemany(self, sql, seq):
+        with self._lock:
+            return self._conn.executemany(sql, seq)
+
+    def commit(self):
+        with self._lock:
+            self._conn.commit()
+
+    def rollback(self):
+        with self._lock:
+            self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 # --- Pydantic models ---
 
 class Message(BaseModel):
@@ -767,27 +801,33 @@ async def chat_completions(body: ChatRequest):
             messages_for_model.extend(reactions_injection)
 
     # --- Tool-use loop ---
-    # First call includes tools so the model can request them.
-    # We allow one round of tool calls before streaming the final answer.
+    # Allows up to MAX_TOOL_ROUNDS sequential rounds of tool calls before
+    # streaming the final answer. This lets Mara fetch data in one round and
+    # act on it (e.g. update/delete) in the next.
     import json as _json
 
-    try:
-        provider, resolved_model, tool_msg = await provider_router.call_with_tools(
-            body.model,
-            messages_for_model,
-            TOOLS,
-            body.max_tokens,
-        )
-    except RuntimeError as exc:
-        error_msg = str(exc)
-        # Surface content-filter hits and other probe errors as a clean SSE error stream
-        async def error_stream():
-            yield f"data: {_json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-        return StreamingResponse(error_stream(), media_type="text/event-stream")
+    MAX_TOOL_ROUNDS = 5
+    tools_used: list[dict] = []  # [{name, ...}] — forwarded to frontend in done event
+    provider = resolved_model = None
 
-    tool_calls = tool_msg.get("tool_calls") or []
-    tools_used: list[dict] = []  # [{name, query?}] — forwarded to frontend in done event
-    if tool_calls:
+    for _round in range(MAX_TOOL_ROUNDS):
+        try:
+            provider, resolved_model, tool_msg = await provider_router.call_with_tools(
+                body.model,
+                messages_for_model,
+                TOOLS,
+                body.max_tokens,
+            )
+        except RuntimeError as exc:
+            error_msg = str(exc)
+            async def error_stream():
+                yield f"data: {_json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+            return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+        tool_calls = tool_msg.get("tool_calls") or []
+        if not tool_calls:
+            break  # No more tool calls — proceed to streaming the final answer
+
         # Append the assistant's tool-call message to the conversation
         messages_for_model.append(tool_msg)
         # Execute each tool and append results

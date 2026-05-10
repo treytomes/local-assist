@@ -22,9 +22,9 @@ The backend doubles as an MCP server. Mara can call tools mid-conversation:
 - **get_weather** — current conditions + 7-day forecast via Open-Meteo; renders an inline weather card in the thread
 - **web_search** — web search via Tavily; results shown as citation cards below the assistant bubble
 - **store_memory / search_memories / list_memories / pin_memory / delete_memory** — knowledge graph operations
-- **list_calendars / get_calendar_events / create_calendar_event / update_calendar_event / delete_calendar_event** — Google Calendar (requires OAuth)
-- **list_task_lists / get_tasks / create_task / complete_task / update_task / delete_task** — Google Tasks (requires OAuth)
-- **search_drive / get_drive_file** — Google Drive read-only search and file preview (requires OAuth)
+- **list_calendars / get_calendar_events / create_calendar_event / update_calendar_event / delete_calendar_event** — Google Calendar full read/write (requires OAuth)
+- **list_task_lists / get_tasks / create_task / complete_task / update_task / delete_task** — Google Tasks across all lists (requires OAuth)
+- **search_drive / get_drive_file** — Google Drive read-only search and plain-text file preview (requires OAuth)
 
 The available tool list is served dynamically from `GET /v1/tools` — the Context Inspector always reflects the live set without any hardcoded frontend mirror.
 
@@ -64,7 +64,7 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - RAG-retrieved chunks include reaction summaries so past emotional signals carry forward
 
 ### Cost Tracking
-- Token usage and USD cost recorded per message
+- Token usage and USD cost recorded per message; right panel shows **cumulative** conversation totals
 - Per-conversation cost summary in the right panel
 - **Cost Dashboard** (Diagnostics tab): daily spend chart (7d/30d/90d), per-model breakdown table, spend alert threshold, CSV export
 
@@ -184,7 +184,7 @@ src/
 
 ## Roadmap
 
-- **M7** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events
+- **M7** — Event-driven notifications: Mara proactively responds to calendar, system, and scheduled events; event sources visible and manageable in Diagnostics
 - **M8** — Voice I/O: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`
 - **M9** — Vision: image attach and screenshot capture
 - **M10** — Polish + packaging: toast notifications, system tray, AppImage / NSIS + auto-update

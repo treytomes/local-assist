@@ -35,6 +35,7 @@ REDIRECT_URI = "http://localhost:8080/oauth2callback"
 _oauth_server: HTTPServer | None = None
 _pending_future: asyncio.Future | None = None
 _event_loop: asyncio.AbstractEventLoop | None = None
+_pending_flow: "Flow | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,21 +92,26 @@ def auth_status(conn: sqlite3.Connection) -> dict:
 # OAuth flow
 # ---------------------------------------------------------------------------
 
-def build_auth_url() -> str:
+def _client_config() -> dict:
+    return {
+        "installed": {
+            "client_id": _client_id(),
+            "client_secret": _client_secret(),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": ["http://localhost"],
+        }
+    }
+
+
+def build_auth_url() -> tuple[str, "Flow"]:
     flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": _client_id(),
-                "client_secret": _client_secret(),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-            }
-        },
+        _client_config(),
         scopes=SCOPES,
         redirect_uri=REDIRECT_URI,
     )
     url, _ = flow.authorization_url(access_type="offline", prompt="consent")
-    return url
+    return url, flow
 
 
 async def start_oauth_flow(conn: sqlite3.Connection) -> dict:
@@ -114,8 +120,17 @@ async def start_oauth_flow(conn: sqlite3.Connection) -> dict:
     The frontend opens the URL; the callback completes in the background.
     """
     global _oauth_server, _pending_future, _event_loop
+
+    # Shut down any leftover server from a previous attempt before binding again
+    if _oauth_server is not None:
+        threading.Thread(target=_oauth_server.shutdown, daemon=True).start()
+        _oauth_server = None
+    if _pending_future is not None and not _pending_future.done():
+        _pending_future.cancel()
+
     _event_loop = asyncio.get_event_loop()
     _pending_future = _event_loop.create_future()
+    global _pending_flow
 
     def _run_server():
         global _oauth_server
@@ -145,37 +160,35 @@ async def start_oauth_flow(conn: sqlite3.Connection) -> dict:
                 # Shut down in a separate thread so do_GET can return first
                 threading.Thread(target=_oauth_server.shutdown, daemon=True).start()
 
+        HTTPServer.allow_reuse_address = True
         _oauth_server = HTTPServer(("localhost", 8080), _Handler)
         _oauth_server.serve_forever()
 
     threading.Thread(target=_run_server, daemon=True).start()
 
-    url = build_auth_url()
+    url, flow = build_auth_url()
+    _pending_flow = flow
 
     async def _exchange_in_background():
+        import logging
+        log = logging.getLogger(__name__)
         try:
             code = await asyncio.wait_for(_pending_future, timeout=300)
-            flow = Flow.from_client_config(
-                {
-                    "web": {
-                        "client_id": _client_id(),
-                        "client_secret": _client_secret(),
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                    }
-                },
-                scopes=SCOPES,
-                redirect_uri=REDIRECT_URI,
-            )
-            flow.fetch_token(code=code)
-            creds = flow.credentials
-            # Get user email
-            email = ""
-            try:
-                user_info = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
-                email = user_info.get("email", "")
-            except Exception:
-                pass
+            loop = asyncio.get_event_loop()
+            flow = _pending_flow
+
+            def _do_exchange():
+                flow.fetch_token(code=code)
+                creds = flow.credentials
+                email = ""
+                try:
+                    user_info = build("oauth2", "v2", credentials=creds).userinfo().get().execute()
+                    email = user_info.get("email", "")
+                except Exception:
+                    pass
+                return creds, email
+
+            creds, email = await loop.run_in_executor(None, _do_exchange)
             with db.transaction(conn):
                 db.upsert_google_tokens(
                     conn,
@@ -185,8 +198,9 @@ async def start_oauth_flow(conn: sqlite3.Connection) -> dict:
                     email=email,
                     scopes=",".join(creds.scopes or []),
                 )
-        except Exception:
-            pass
+            log.info("Google OAuth complete, stored tokens for %s", email)
+        except Exception as e:
+            log.error("Google OAuth exchange failed: %s", e, exc_info=True)
 
     asyncio.create_task(_exchange_in_background())
     return {"auth_url": url}
