@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 # Model / endpoint config
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "mistral-large-3-instruct-2512"
+# Publisher-prefixed version name required by the Vertex OpenAI-compatible endpoint.
+# Full publisher path: publishers/mistralai/models/mistral-large-3
+MODEL_ID = "mistralai/mistral-large-3-instruct-2512"
 
 # Overridable by tests
 _PROJECT_OVERRIDE: str = ""

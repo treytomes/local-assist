@@ -4,7 +4,7 @@ from .database import transaction
 # Seed data: (provider, model, input_cost_per_1k, output_cost_per_1k)
 # Prices in USD per 1K tokens.
 #
-# Sources (verified 2026-05-08):
+# Sources (verified 2026-05-11):
 #   gpt-5.3-chat, Mistral-Large-3  — not in public retail API; set from Azure AI
 #                                    Foundry documentation / portal estimates.
 #                                    Update via POST /v1/pricing when confirmed.
@@ -16,6 +16,11 @@ from .database import transaction
 #   gpt-4o-transcribe (global)     — audio input: gpt-4o-transcribe-aud-inp-glbl
 #                                    text output:  gpt-4o-transcribe-txt-out-glbl
 #   gpt-realtime (txt, global)     — gpt-4o-rt-txt-1217 Inp/Outp glbl
+#   vertex/mistralai/mistral-large-3-instruct-2512
+#                                  — Vertex AI pricing page is JS-rendered; using
+#                                    Mistral's published API rate ($2/$6 per 1M tokens)
+#                                    as the authoritative source. Update via POST
+#                                    /v1/pricing once Vertex-specific pricing is confirmed.
 #   ollama/gemma3:1b               — free (local inference)
 PRICING_SEED = [
     # Chat models (preview — prices estimated, update via /v1/pricing when confirmed)
@@ -32,6 +37,9 @@ PRICING_SEED = [
     ("azure", "gpt-4o-transcribe",         0.006,   0.010),
     # Realtime text (input/output text tokens, global deployment)
     ("azure", "gpt-realtime",              0.005,   0.020),
+    # Vertex AI — Mistral Large 3 (publisher-prefixed model ID used by the endpoint)
+    # Rate matches Mistral's published API pricing ($2/$6 per 1M tokens).
+    ("vertex", "mistralai/mistral-large-3-instruct-2512", 0.002, 0.006),
     # Local Ollama — always free
     ("ollama", "gemma3:1b",                0.0,     0.0),
 ]
