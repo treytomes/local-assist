@@ -7,6 +7,35 @@ OLLAMA_BASE = "http://localhost:11434"
 DEFAULT_MODEL = "gemma3:1b"
 
 
+def _normalize_messages(messages: list[dict]) -> list[dict]:
+    """
+    Ollama's native /api/chat API differs from OpenAI format in two ways:
+    - content must be a string (not null)
+    - tool_call arguments must be a JSON object (dict), not a JSON-encoded string
+    """
+    result = []
+    for msg in messages:
+        msg = dict(msg)
+        if msg.get("content") is None:
+            msg["content"] = ""
+        if msg.get("tool_calls"):
+            calls = []
+            for tc in msg["tool_calls"]:
+                tc = dict(tc)
+                fn = dict(tc.get("function", {}))
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        fn["arguments"] = json.loads(args)
+                    except (json.JSONDecodeError, ValueError):
+                        fn["arguments"] = {}
+                tc["function"] = fn
+                calls.append(tc)
+            msg["tool_calls"] = calls
+        result.append(msg)
+    return result
+
+
 async def health_check() -> bool:
     try:
         async with httpx.AsyncClient(timeout=3) as client:
@@ -43,13 +72,14 @@ async def call_with_tools(
     max_tokens: int = 2048,
 ) -> dict:
     """
-    Non-streaming tool call. Returns the assistant message dict:
+    Non-streaming tool call. Returns the assistant message dict in OpenAI format:
       {"role": "assistant", "content": ..., "tool_calls": [...] | None}
+    Arguments are serialized back to JSON strings to match OpenAI convention.
     """
     url = f"{OLLAMA_BASE}/api/chat"
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": _normalize_messages(messages),
         "tools": tools,
         "stream": False,
         "options": {"num_predict": max_tokens},
@@ -59,7 +89,14 @@ async def call_with_tools(
         if r.status_code != 200:
             raise RuntimeError(f"Ollama HTTP {r.status_code}: {r.text[:200]}")
         data = r.json()
-        return data["message"]
+        msg = data["message"]
+        # Ollama returns arguments as a dict; re-serialize to string for OpenAI compat
+        if msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                fn = tc.get("function", {})
+                if isinstance(fn.get("arguments"), dict):
+                    fn["arguments"] = json.dumps(fn["arguments"])
+        return msg
 
 
 async def stream_chat(
@@ -77,7 +114,7 @@ async def stream_chat(
     url = f"{OLLAMA_BASE}/api/chat"
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": _normalize_messages(messages),
         "stream": True,
         "options": {
             "num_predict": max_tokens,
