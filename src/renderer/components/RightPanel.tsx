@@ -63,11 +63,11 @@ export default function RightPanel(): React.ReactElement {
       <Divider style={{ borderColor: 'var(--vscode-border)', margin: '6px 0' }} />
       {health ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
-          {(['azure', 'ollama'] as const).map((p) => (
+          {(['azure', 'vertex', 'ollama'] as const).map((p) => (
             <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Badge status={health[p] ? 'success' : 'error'} />
               <Text style={{ color: 'var(--vscode-text)', fontSize: 12, flex: 1, textTransform: 'capitalize' }}>
-                {p}
+                {p === 'vertex' ? 'Vertex AI' : p}
               </Text>
               {health.active_provider === p && (
                 <Tag

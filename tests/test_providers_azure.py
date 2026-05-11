@@ -28,26 +28,26 @@ def _embed_url() -> str:
 
 @respx.mock
 async def test_health_check_success():
-    respx.post(_chat_url("gpt-5.3-chat")).respond(200, json={})
+    respx.post(_chat_url("Mistral-Large-3")).respond(200, json={})
     assert await azure_mod.health_check() is True
 
 
 @respx.mock
 async def test_health_check_4xx_is_reachable():
     # A 4xx (e.g. rate limit, bad request) still means Azure is up
-    respx.post(_chat_url("gpt-5.3-chat")).respond(400, json={})
+    respx.post(_chat_url("Mistral-Large-3")).respond(400, json={})
     assert await azure_mod.health_check() is True
 
 
 @respx.mock
 async def test_health_check_5xx_returns_false():
-    respx.post(_chat_url("gpt-5.3-chat")).respond(500, json={})
+    respx.post(_chat_url("Mistral-Large-3")).respond(500, json={})
     assert await azure_mod.health_check() is False
 
 
 @respx.mock
 async def test_health_check_network_error():
-    respx.post(_chat_url("gpt-5.3-chat")).mock(side_effect=httpx.ConnectError("refused"))
+    respx.post(_chat_url("Mistral-Large-3")).mock(side_effect=httpx.ConnectError("refused"))
     assert await azure_mod.health_check() is False
 
 
@@ -69,12 +69,12 @@ def _make_sse_body(deltas: list[str], usage: dict) -> bytes:
 @respx.mock
 async def test_stream_chat_yields_deltas_and_usage():
     body = _make_sse_body(["Hello", " world"], {"prompt_tokens": 10, "completion_tokens": 5})
-    respx.post(_chat_url("gpt-5.3-chat")).respond(
+    respx.post(_chat_url("Mistral-Large-3")).respond(
         200, content=body, headers={"content-type": "text/event-stream"}
     )
 
     chunks = []
-    async for chunk in azure_mod.stream_chat("gpt-5.3-chat", [{"role": "user", "content": "hi"}]):
+    async for chunk in azure_mod.stream_chat("Mistral-Large-3", [{"role": "user", "content": "hi"}]):
         chunks.append(chunk)
 
     deltas = [c for c in chunks if c["type"] == "delta"]
@@ -86,10 +86,10 @@ async def test_stream_chat_yields_deltas_and_usage():
 
 @respx.mock
 async def test_stream_chat_http_error():
-    respx.post(_chat_url("gpt-5.3-chat")).respond(500, content=b"Internal Server Error")
+    respx.post(_chat_url("Mistral-Large-3")).respond(500, content=b"Internal Server Error")
 
     chunks = []
-    async for chunk in azure_mod.stream_chat("gpt-5.3-chat", []):
+    async for chunk in azure_mod.stream_chat("Mistral-Large-3", []):
         chunks.append(chunk)
 
     assert chunks[0]["type"] == "error"
@@ -98,10 +98,10 @@ async def test_stream_chat_http_error():
 
 @respx.mock
 async def test_stream_chat_network_error():
-    respx.post(_chat_url("gpt-5.3-chat")).mock(side_effect=httpx.ConnectError("refused"))
+    respx.post(_chat_url("Mistral-Large-3")).mock(side_effect=httpx.ConnectError("refused"))
 
     chunks = []
-    async for chunk in azure_mod.stream_chat("gpt-5.3-chat", []):
+    async for chunk in azure_mod.stream_chat("Mistral-Large-3", []):
         chunks.append(chunk)
 
     assert chunks[0]["type"] == "error"
@@ -110,11 +110,11 @@ async def test_stream_chat_network_error():
 @respx.mock
 async def test_stream_chat_skips_malformed_json():
     body = b"data: not-json\n\ndata: [DONE]\n\n"
-    respx.post(_chat_url("gpt-5.3-chat")).respond(
+    respx.post(_chat_url("Mistral-Large-3")).respond(
         200, content=body, headers={"content-type": "text/event-stream"}
     )
     chunks = []
-    async for chunk in azure_mod.stream_chat("gpt-5.3-chat", []):
+    async for chunk in azure_mod.stream_chat("Mistral-Large-3", []):
         chunks.append(chunk)
     assert not any(c["type"] == "delta" for c in chunks)
 
@@ -122,11 +122,11 @@ async def test_stream_chat_skips_malformed_json():
 @respx.mock
 async def test_stream_chat_skips_non_data_lines():
     body = b": comment\n\ndata: [DONE]\n\n"
-    respx.post(_chat_url("gpt-5.3-chat")).respond(
+    respx.post(_chat_url("Mistral-Large-3")).respond(
         200, content=body, headers={"content-type": "text/event-stream"}
     )
     chunks = []
-    async for chunk in azure_mod.stream_chat("gpt-5.3-chat", []):
+    async for chunk in azure_mod.stream_chat("Mistral-Large-3", []):
         chunks.append(chunk)
     assert chunks == []
 

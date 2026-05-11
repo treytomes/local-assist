@@ -196,22 +196,52 @@ function GoogleAccountTab({ backendUrl }: { backendUrl: string }): React.ReactEl
   )
 }
 
-const TTS_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
+const AZURE_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
+const KOKORO_VOICES = [
+  'af_heart', 'af_bella', 'af_nicole', 'af_sarah', 'af_sky',
+  'am_adam', 'am_michael',
+  'bf_emma', 'bf_isabella', 'bm_george', 'bm_lewis',
+]
 
 function VoiceTab(): React.ReactElement {
-  const { ttsVoice, ttsSpeed, setTtsVoice, setTtsSpeed } = useAppStore()
+  const { backendUrl, ttsVoice, ttsSpeed, setTtsVoice, setTtsSpeed, speechProvider } = useAppStore()
+  const [voices, setVoices] = useState<string[]>(speechProvider === 'local' ? KOKORO_VOICES : AZURE_VOICES)
+  const isLocal = speechProvider === 'local'
+  const speedMin = isLocal ? 0.5 : 0.25
+  const speedMax = isLocal ? 2.0 : 4.0
+
+  useEffect(() => {
+    fetch(`${backendUrl}/v1/audio/voices`)
+      .then((r) => r.json())
+      .then((data) => {
+        const list: string[] = data.voices ?? []
+        if (list.length > 0) {
+          setVoices(list)
+          if (!list.includes(ttsVoice)) setTtsVoice(list[0])
+        }
+      })
+      .catch(() => {})
+  }, [backendUrl, speechProvider]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clamp speed into the valid range for the current provider
+  useEffect(() => {
+    if (ttsSpeed < speedMin) setTtsSpeed(speedMin)
+    else if (ttsSpeed > speedMax) setTtsSpeed(speedMax)
+  }, [speechProvider]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>
         Voice settings apply when using the Speak button on assistant messages and the mic button in the composer.
+        Switch between Azure and local (Kokoro) TTS from the Diagnostics → Status tab.
       </Text>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Voice</Text>
         <Select
           value={ttsVoice}
           onChange={setTtsVoice}
-          options={TTS_VOICES.map((v) => ({ label: v, value: v }))}
-          style={{ width: 180 }}
+          options={voices.map((v) => ({ label: v, value: v }))}
+          style={{ width: 200 }}
         />
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -220,12 +250,14 @@ function VoiceTab(): React.ReactElement {
           <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, fontFamily: 'monospace' }}>{ttsSpeed.toFixed(2)}×</Text>
         </div>
         <Slider
-          min={0.25} max={4.0} step={0.05}
+          min={speedMin} max={speedMax} step={0.05}
           value={ttsSpeed}
           onChange={setTtsSpeed}
           styles={{ track: { background: 'var(--vscode-accent)' } }}
         />
-        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>Range: 0.25× – 4.0×</Text>
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>
+          Range: {speedMin.toFixed(2)}× – {speedMax.toFixed(2)}× ({isLocal ? 'Kokoro' : 'Azure'})
+        </Text>
       </div>
     </div>
   )

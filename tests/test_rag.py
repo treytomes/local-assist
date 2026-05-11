@@ -129,6 +129,7 @@ async def test_retrieve_context_excludes_conv(db_conn):
 
     with patch("src.backend.rag.azure.get_embedding", new=AsyncMock(return_value=FAKE_VECTOR)):
         await embed_conversation(db_conn, "c5")
-        results = await retrieve_context(db_conn, "query", exclude_conv_id="c5")
+        # embed gives message id "m1", pass that as the exclude set
+        results = await retrieve_context(db_conn, "query", exclude_message_ids={"m1"})
 
-    assert all(r["conversation_id"] != "c5" for r in results)
+    assert all(r["id"].split(":")[0] != "m1" for r in results)

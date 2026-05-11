@@ -5,6 +5,7 @@ import httpx
 from unittest.mock import patch, MagicMock
 
 import src.backend.providers.ollama as ollama_mod
+from src.backend.providers.ollama import _normalize_messages
 
 
 @pytest.fixture(autouse=True)
@@ -144,3 +145,87 @@ async def test_stream_chat_no_content_in_delta():
 
     assert not any(c["type"] == "delta" for c in chunks)
     assert any(c["type"] == "usage" for c in chunks)
+
+
+# --- _normalize_messages ---
+
+def test_normalize_null_content_becomes_empty_string():
+    msgs = [{"role": "assistant", "content": None, "tool_calls": []}]
+    result = _normalize_messages(msgs)
+    assert result[0]["content"] == ""
+
+
+def test_normalize_string_arguments_become_dict():
+    msgs = [{
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": "tc1",
+            "type": "function",
+            "function": {"name": "get_datetime", "arguments": '{"timezone": "UTC"}'},
+        }],
+    }]
+    result = _normalize_messages(msgs)
+    args = result[0]["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(args, dict)
+    assert args == {"timezone": "UTC"}
+
+
+def test_normalize_dict_arguments_unchanged():
+    msgs = [{
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "tc1",
+            "type": "function",
+            "function": {"name": "foo", "arguments": {"key": "val"}},
+        }],
+    }]
+    result = _normalize_messages(msgs)
+    assert result[0]["tool_calls"][0]["function"]["arguments"] == {"key": "val"}
+
+
+def test_normalize_invalid_json_arguments_become_empty_dict():
+    msgs = [{
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "tc1", "type": "function",
+                        "function": {"name": "foo", "arguments": "not-json"}}],
+    }]
+    result = _normalize_messages(msgs)
+    assert result[0]["tool_calls"][0]["function"]["arguments"] == {}
+
+
+def test_normalize_does_not_mutate_original():
+    original = {"role": "assistant", "content": None, "tool_calls": []}
+    _normalize_messages([original])
+    assert original["content"] is None  # untouched
+
+
+# --- call_with_tools ---
+
+@respx.mock
+async def test_call_with_tools_returns_message_with_string_args():
+    # Ollama returns arguments as a dict; call_with_tools must re-serialize to string
+    msg = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": "tc1",
+            "type": "function",
+            "function": {"name": "get_datetime", "arguments": {"timezone": "UTC"}},
+        }],
+    }
+    respx.post("http://localhost:11434/api/chat").respond(200, json={"message": msg})
+
+    result = await ollama_mod.call_with_tools("gemma3:1b", [], [])
+    args = result["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(args, str)
+    assert json.loads(args) == {"timezone": "UTC"}
+
+
+@respx.mock
+async def test_call_with_tools_http_error():
+    respx.post("http://localhost:11434/api/chat").respond(500, content=b"error")
+    with pytest.raises(RuntimeError, match="500"):
+        await ollama_mod.call_with_tools("gemma3:1b", [], [])

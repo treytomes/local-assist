@@ -69,7 +69,7 @@ def test_get_conversation_cost_empty(db_conn):
     db_conn.commit()
     result = get_conversation_cost(db_conn, "conv-3")
     # All-NULL SUM returns a row; values are None or 0 depending on SQLite version
-    assert result["total_cost"] is None or result["total_cost"] == 0.0
+    assert result["total_cost_usd"] is None or result["total_cost_usd"] == 0.0
 
 
 def test_get_conversation_cost_with_usage(db_conn):
@@ -80,7 +80,7 @@ def test_get_conversation_cost_with_usage(db_conn):
     result = get_conversation_cost(db_conn, "conv-4")
     assert result["prompt_tokens"] == 1500
     assert result["completion_tokens"] == 1500
-    assert result["total_cost"] > 0
+    assert result["total_cost_usd"] > 0
 
 
 def test_get_daily_costs_empty(db_conn):

@@ -1,0 +1,19 @@
+[run]
+omit =
+    # Requires live external APIs — covered by ./test.sh --integration
+    src/backend/main.py
+    src/backend/mcp_server.py
+    src/backend/tools/google.py
+    src/backend/tools/datetime_tool.py
+    src/backend/tools/location_tool.py
+    src/backend/tools/memory_tool.py
+    src/backend/tools/search.py
+    src/backend/tools/sound_tool.py
+    src/backend/tools/system_info_tool.py
+    src/backend/tools/tokenizer_tool.py
+    src/backend/tools/weather_tool.py
+    src/backend/providers/local_speech.py
+    src/backend/providers/speech.py
+    src/backend/events/response_loop.py
+    src/backend/events/sources/*
+    src/backend/events/watcher.py
