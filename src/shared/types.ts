@@ -1,9 +1,11 @@
 export interface HealthStatus {
   azure: boolean
+  vertex: boolean
   ollama: boolean
   local_tts: boolean
   local_stt: boolean
-  active_provider: 'azure' | 'ollama' | 'none'
+  active_provider: 'azure' | 'vertex' | 'ollama' | 'none'
+  preferred_provider: 'auto' | 'azure' | 'vertex' | 'ollama'
 }
 
 export interface ApiResponse {

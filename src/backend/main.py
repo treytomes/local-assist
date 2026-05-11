@@ -95,6 +95,11 @@ async def lifespan(app: FastAPI):
     if _stored_whisper and _stored_whisper in _ls.WHISPER_MODELS:
         _ls.set_stt_model_size(_stored_whisper)
 
+    # Wire chat provider preference into router
+    provider_router.set_provider_setting_fn(
+        lambda: _db_get_setting(_conn, "chat_provider") or "auto"
+    )
+
     # Event watcher infrastructure
     def _watcher_interval(source_type: str, default: int) -> int:
         v = _db_get_setting(_conn, f"watcher_interval.{source_type}")
@@ -817,6 +822,27 @@ class ConversationUpdate(BaseModel):
 @app.get("/v1/health")
 async def health():
     return await provider_router.get_health()
+
+
+_CHAT_PROVIDER_KEY = "chat_provider"
+_CHAT_PROVIDERS = ("auto", "azure", "vertex", "ollama")
+
+
+@app.get("/v1/chat/provider")
+def get_chat_provider():
+    """Return the active chat provider preference."""
+    v = _db_get_setting(conn(), _CHAT_PROVIDER_KEY) or "auto"
+    return {"provider": v, "options": list(_CHAT_PROVIDERS)}
+
+
+@app.put("/v1/chat/provider")
+def set_chat_provider(body: dict):
+    """Pin the chat provider ('auto', 'azure', 'vertex', 'ollama')."""
+    provider = body.get("provider", "auto")
+    if provider not in _CHAT_PROVIDERS:
+        raise HTTPException(400, f"provider must be one of {list(_CHAT_PROVIDERS)}")
+    _db_set_setting(conn(), _CHAT_PROVIDER_KEY, provider)
+    return {"provider": provider}
 
 
 # --- Conversations ---

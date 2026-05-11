@@ -301,6 +301,16 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] Rendered as `<img src="data:image/svg+xml;...">` — sandboxed, no script execution
 - [x] CSP `img-src 'self' blob: data:` added to allow inline `data:` image URIs
 
+### Post-M8 — Vertex AI provider ✅
+**Goal:** Add Vertex AI (GCP) as a second cloud provider, filling the gap when Azure is degraded.
+
+- [x] `src/backend/providers/vertex.py` — Mistral Large 3 via Vertex Model Garden OpenAI-compatible endpoint; Google ADC auth; streaming + `_non_streaming_fallback`; `call_with_tools`; `health_check`
+- [x] `router.py` rewritten — Azure → Vertex → Ollama fallback chain; `_pick_cloud_provider()` probes both cloud providers concurrently via `asyncio.gather`; manual pin via `set_provider_setting_fn` callback (avoids circular import)
+- [x] `GET/PUT /v1/chat/provider` — read/set preferred provider (`auto` | `azure` | `vertex` | `ollama`); persisted to settings DB
+- [x] `HealthStatus` extended with `vertex: boolean` and `preferred_provider` fields; `GET /v1/health` probes all 5 endpoints
+- [x] Diagnostics → Status: Vertex AI health badge; Preferred provider selector (Auto/Azure/Vertex/Ollama)
+- [x] `.env` — `GCP_PROJECT` + `VERTEX_REGION` optional vars; auth via `gcloud auth application-default login`
+
 ### M9 — Vision
 **Goal:** Send images, get analysis back.
 
@@ -360,6 +370,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   ├── database.py            ✓ schema, migrations, CRUD
 │   │   ├── providers/
 │   │   │   ├── azure.py           ✓ streaming + tool call support + 500 fallback
+│   │   │   ├── vertex.py          ✓ Vertex AI (GCP) streaming + tool call support + ADC auth
 │   │   │   ├── ollama.py          ✓ streaming + tool call support
 │   │   │   ├── speech.py          ✓ Azure TTS (gpt-4o-mini-tts) + STT (gpt-4o-transcribe)
 │   │   │   └── local_speech.py    ✓ in-process Kokoro TTS + faster-whisper STT

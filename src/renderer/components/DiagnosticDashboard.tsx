@@ -485,10 +485,23 @@ export default function DiagnosticDashboard(): React.ReactElement {
 
   const [speechProviderLoading, setSpeechProviderLoading] = useState(false)
 
+  const [chatProvider, setChatProvider] = useState<'auto' | 'azure' | 'vertex' | 'ollama'>('auto')
+  const [chatProviderLoading, setChatProviderLoading] = useState(false)
+
   const [whisperModel, setWhisperModel] = useState<string>('base.en')
   const [whisperModels, setWhisperModels] = useState<string[]>([])
   const [whisperLoaded, setWhisperLoaded] = useState(false)
   const [whisperLoading, setWhisperLoading] = useState(false)
+
+  const fetchChatProvider = useCallback(async () => {
+    try {
+      const res = await fetch(`${backendUrl}/v1/chat/provider`)
+      const data = await res.json()
+      setChatProvider(data.provider ?? 'auto')
+    } catch {
+      // non-fatal
+    }
+  }, [backendUrl])
 
   const fetchSpeechProvider = useCallback(async () => {
     try {
@@ -506,6 +519,22 @@ export default function DiagnosticDashboard(): React.ReactElement {
       // non-fatal
     }
   }, [backendUrl, setSpeechProvider])
+
+  async function changeChatProvider(value: 'auto' | 'azure' | 'vertex' | 'ollama'): Promise<void> {
+    setChatProviderLoading(true)
+    try {
+      await fetch(`${backendUrl}/v1/chat/provider`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: value }),
+      })
+      setChatProvider(value)
+    } catch {
+      // non-fatal
+    } finally {
+      setChatProviderLoading(false)
+    }
+  }
 
   async function toggleSpeechProvider(): Promise<void> {
     const next = speechProvider === 'azure' ? 'local' : 'azure'
@@ -562,7 +591,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
       setHealth(data)
       setHealthLastChecked(new Date())
     } catch {
-      setHealth({ azure: false, ollama: false, local_tts: false, local_stt: false, active_provider: 'none' })
+      setHealth({ azure: false, vertex: false, ollama: false, local_tts: false, local_stt: false, active_provider: 'none', preferred_provider: 'auto' })
       setHealthLastChecked(new Date())
     } finally {
       setHealthLoading(false)
@@ -582,6 +611,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
     fetchHealth()
     fetchSearchUsage()
     fetchSpeechProvider()
+    fetchChatProvider()
     const id = setInterval(() => {
       if (autoRefreshRef.current) {
         fetchHealth()
@@ -589,7 +619,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
       }
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchHealth, fetchSearchUsage, fetchSpeechProvider])
+  }, [fetchHealth, fetchSearchUsage, fetchSpeechProvider, fetchChatProvider])
 
   function extractVarNames(p: string): string[] {
     return [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
@@ -696,6 +726,11 @@ export default function DiagnosticDashboard(): React.ReactElement {
                 isActive={health.active_provider === 'azure'}
               />
               <ProviderBadge
+                healthy={health.vertex}
+                label="Vertex AI"
+                isActive={health.active_provider === 'vertex'}
+              />
+              <ProviderBadge
                 healthy={health.ollama}
                 label="Ollama"
                 isActive={health.active_provider === 'ollama'}
@@ -706,6 +741,23 @@ export default function DiagnosticDashboard(): React.ReactElement {
               {healthLoading ? 'Checking…' : 'No data'}
             </Text>
           )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, minWidth: 70 }}>Preferred:</Text>
+            <Select
+              size="small"
+              value={chatProvider}
+              onChange={changeChatProvider}
+              loading={chatProviderLoading}
+              style={{ flex: 1 }}
+              options={[
+                { label: 'Auto', value: 'auto' },
+                { label: 'Azure', value: 'azure' },
+                { label: 'Vertex AI', value: 'vertex' },
+                { label: 'Ollama', value: 'ollama' },
+              ]}
+            />
+          </div>
 
           <Divider style={{ borderColor: 'var(--vscode-border)', margin: '12px 0 8px' }} />
           <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 8, display: 'block' }}>

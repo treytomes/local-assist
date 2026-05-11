@@ -1,6 +1,6 @@
 # Local Assist
 
-A local-first AI desktop assistant built with Electron, React, and a FastAPI Python sidecar. Powered by **Mistral Large 3** via Azure AI, with automatic fallback to a local Ollama instance when offline.
+A local-first AI desktop assistant built with Electron, React, and a FastAPI Python sidecar. Powered by **Mistral Large 3** via Azure AI, with automatic fallback through Vertex AI (GCP) and then a local Ollama instance when cloud providers are unavailable.
 
 ![Local Assist screenshot](assets/screenshot-01.png)
 
@@ -91,7 +91,7 @@ Switch between Azure and fully local, in-process speech models from **Diagnostic
 
 ### Developer Tools
 - **Context Inspector** — shows the exact message list sent to the model on the next turn, with context window truncation applied, plus live tool list and connection status
-- **Diagnostic Dashboard** — provider health (Azure + Ollama + local TTS/STT, 30s auto-refresh), Tavily search quota progress bar with portal baseline offset, full API tester for all backend endpoints, voice provider toggle and Whisper model selector
+- **Diagnostic Dashboard** — provider health (Azure + Vertex AI + Ollama + local TTS/STT, 30s auto-refresh), chat provider selector (Auto/Azure/Vertex/Ollama), Tavily search quota progress bar with portal baseline offset, full API tester for all backend endpoints, voice provider toggle and Whisper model selector
 
 ### Message Reactions
 - React to any message with emoji from a fixed 12-emoji palette (👍 ❤️ 😂 😮 😢 😡 🎉 🤔 👀 🙌 🔥 ✅)
@@ -135,6 +135,7 @@ The `GET /v1/notifications` SSE endpoint streams notification payloads to all co
 | Database | SQLite via better-sqlite3 + sqlite-vec for embeddings |
 | Tool protocol | MCP (`mcp[cli]`) mounted as ASGI sub-app at `/mcp` |
 | Primary AI | Azure AI — `Mistral-Large-3` |
+| Secondary AI | Vertex AI (GCP) — `Mistral-Large-3` via Model Garden |
 | Fallback AI | Ollama (`gemma3:1b` auto-pulled if not present) |
 | Tokenizer | `mistral-common` Tekken v3 (131k vocab, tiktoken) |
 
@@ -184,7 +185,11 @@ AZURE_API_KEY=<your-key>
 TAVILY_API_KEY=<your-key>           # enables web search
 GOOGLE_CLIENT_ID=<your-client-id>   # enables Calendar, Tasks, Drive
 GOOGLE_CLIENT_SECRET=<your-secret>
+GCP_PROJECT=<your-gcp-project-id>   # enables Vertex AI fallback provider
+VERTEX_REGION=us-south1             # Vertex AI region (default: us-south1)
 ```
+
+> **Vertex AI auth:** Uses [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials). Run `gcloud auth application-default login` once to authenticate.
 
 #### Google OAuth setup
 
