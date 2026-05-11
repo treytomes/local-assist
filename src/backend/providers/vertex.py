@@ -1,12 +1,17 @@
 """
-Vertex AI provider — Mistral Large 3 via Google Cloud AI Platform.
+Vertex AI provider — Mistral Large 3 via Google Cloud Model Garden.
 
-Uses the OpenAI-compatible endpoint exposed by Vertex Model Garden:
-  https://{region}-aiplatform.googleapis.com/v1beta1/projects/{project}/
-      locations/{region}/endpoints/openai/chat/completions
+Mistral models on Vertex use the publisher endpoint pattern, not the
+OpenAI-compatibility gateway (/endpoints/openai) which is Gemini-only:
+
+  Streaming:     POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/
+                     locations/{region}/publishers/mistralai/models/{model}:streamRawPredict
+  Non-streaming: POST .../models/{model}:rawPredict
+
+The request body and response format are OpenAI-compatible.
 
 Auth: Google Application Default Credentials (ADC) with the
-cloud-platform scope — same mechanism used by the Google tools.
+cloud-platform scope.
 
 Environment variables (all optional; defaults below):
   GCP_PROJECT   — GCP project ID (falls back to ADC-inferred project)
@@ -27,9 +32,11 @@ logger = logging.getLogger(__name__)
 # Model / endpoint config
 # ---------------------------------------------------------------------------
 
-# Publisher-prefixed version name required by the Vertex OpenAI-compatible endpoint.
-# Full publisher path: publishers/mistralai/models/mistral-large-3
-MODEL_ID = "mistralai/mistral-large-3-instruct-2512"
+# Short model name used in the publisher endpoint path.
+PUBLISHER = "mistralai"
+MODEL_NAME = "mistral-large-3"
+# Version name passed in the request body (required by the rawPredict API).
+MODEL_VERSION = "mistralai/mistral-large-3-instruct-2512"
 
 # Overridable by tests
 _PROJECT_OVERRIDE: str = ""
@@ -41,7 +48,6 @@ def _project() -> str:
         return _PROJECT_OVERRIDE
     if os.getenv("GCP_PROJECT"):
         return os.environ["GCP_PROJECT"]
-    # Fall back to ADC-inferred project
     try:
         import google.auth
         _, project = google.auth.default()
@@ -58,13 +64,18 @@ def _base_url() -> str:
     region = _region()
     project = _project()
     return (
-        f"https://{region}-aiplatform.googleapis.com/v1beta1"
-        f"/projects/{project}/locations/{region}/endpoints/openai"
+        f"https://{region}-aiplatform.googleapis.com/v1"
+        f"/projects/{project}/locations/{region}"
+        f"/publishers/{PUBLISHER}/models/{MODEL_NAME}"
     )
 
 
-def _chat_url() -> str:
-    return f"{_base_url()}/chat/completions"
+def _stream_url() -> str:
+    return f"{_base_url()}:streamRawPredict"
+
+
+def _predict_url() -> str:
+    return f"{_base_url()}:rawPredict"
 
 
 # ---------------------------------------------------------------------------
@@ -98,27 +109,28 @@ async def health_check() -> bool:
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             r = await client.post(
-                _chat_url(),
+                _predict_url(),
                 headers=_headers(),
                 json={
-                    "model": MODEL_ID,
+                    "model": MODEL_VERSION,
                     "messages": [{"role": "user", "content": "hi"}],
                     "max_tokens": 1,
                     "stream": False,
                 },
             )
-            return r.status_code < 500
+            # 404 = model not yet accessible (quota pending); treat as unhealthy, not error
+            return r.status_code == 200 or (r.status_code not in (404, 403) and r.status_code < 500)
     except Exception:
         return False
 
 
 # ---------------------------------------------------------------------------
-# Chat payload helpers — identical logic to azure.py
+# Chat payload helpers
 # ---------------------------------------------------------------------------
 
-def _chat_payload(messages: list[dict], max_tokens: int, temperature: float) -> dict:
+def _stream_payload(messages: list[dict], max_tokens: int, temperature: float) -> dict:
     return {
-        "model": MODEL_ID,
+        "model": MODEL_VERSION,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
@@ -143,20 +155,20 @@ async def stream_chat(
       {"type": "usage",   "prompt_tokens": int, "completion_tokens": int}
       {"type": "error",   "message": str}
     """
-    url = _chat_url()
-    payload = _chat_payload(messages, max_tokens, temperature)
+    url = _stream_url()
+    payload = _stream_payload(messages, max_tokens, temperature)
 
     async with httpx.AsyncClient(timeout=120) as client:
         try:
             async with client.stream("POST", url, headers=_headers(), json=payload) as resp:
                 if resp.status_code == 500:
                     await resp.aread()
-                    async for item in _non_streaming_fallback(client, url, payload):
+                    async for item in _non_streaming_fallback(client, payload):
                         yield item
                     return
                 if resp.status_code != 200:
                     body = await resp.aread()
-                    yield {"type": "error", "message": f"Vertex HTTP {resp.status_code}: {body.decode()[:200]}"}
+                    yield {"type": "error", "message": f"Vertex HTTP {resp.status_code}: {body.decode()[:400]}"}
                     return
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
@@ -187,14 +199,15 @@ async def stream_chat(
 
 
 async def _non_streaming_fallback(
-    client: httpx.AsyncClient, url: str, streaming_payload: dict
+    client: httpx.AsyncClient, streaming_payload: dict
 ) -> AsyncIterator[dict]:
     payload = {k: v for k, v in streaming_payload.items() if k not in ("stream", "stream_options")}
     payload["stream"] = False
+    url = _predict_url()
     try:
         r = await client.post(url, headers=_headers(), json=payload, timeout=120)
         if r.status_code != 200:
-            yield {"type": "error", "message": f"Vertex HTTP {r.status_code} (fallback): {r.text[:200]}"}
+            yield {"type": "error", "message": f"Vertex HTTP {r.status_code} (fallback): {r.text[:400]}"}
             return
         data = r.json()
         msg = data["choices"][0]["message"]
@@ -229,15 +242,15 @@ async def call_with_tools(
     Returns the raw message dict from the first choice.
     """
     payload = {
-        "model": MODEL_ID,
+        "model": MODEL_VERSION,
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
         "max_tokens": max_tokens,
     }
     async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(_chat_url(), headers=_headers(), json=payload)
+        r = await client.post(_predict_url(), headers=_headers(), json=payload)
         if r.status_code != 200:
-            raise RuntimeError(f"Vertex HTTP {r.status_code}: {r.text[:200]}")
+            raise RuntimeError(f"Vertex HTTP {r.status_code}: {r.text[:400]}")
         data = r.json()
         return data["choices"][0]["message"]
