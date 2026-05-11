@@ -187,6 +187,7 @@ GOOGLE_CLIENT_ID=<your-client-id>   # enables Calendar, Tasks, Drive
 GOOGLE_CLIENT_SECRET=<your-secret>
 GCP_PROJECT=<your-gcp-project-id>   # enables Vertex AI fallback provider
 VERTEX_REGION=us-south1             # Vertex AI region (default: us-south1)
+VERTEX_ENDPOINT_ID=<endpoint-id>    # numeric ID of a custom Mistral deployment (optional)
 ```
 
 > **Vertex AI auth:** Uses [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials). Run `gcloud auth application-default login` once to authenticate.

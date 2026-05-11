@@ -1,21 +1,27 @@
 """
 Vertex AI provider — Mistral Large 3 via Google Cloud Model Garden.
 
-Mistral models on Vertex use the publisher endpoint pattern, not the
-OpenAI-compatibility gateway (/endpoints/openai) which is Gemini-only:
+Supports two deployment modes selected by environment variable:
 
-  Streaming:     POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/
-                     locations/{region}/publishers/mistralai/models/{model}:streamRawPredict
-  Non-streaming: POST .../models/{model}:rawPredict
+  Custom endpoint (VERTEX_ENDPOINT_ID set):
+    POST https://{region}-aiplatform.googleapis.com/v1/projects/{project}/
+             locations/{region}/endpoints/{endpoint_id}:streamRawPredict
+    Use this after deploying Mistral Large 3 to a dedicated GPU endpoint via
+    Model Garden. The endpoint ID is shown on the Vertex AI → Endpoints page.
 
-The request body and response format are OpenAI-compatible.
+  Publisher model (VERTEX_ENDPOINT_ID not set):
+    POST .../publishers/mistralai/models/mistral-large-3:streamRawPredict
+    Managed API — no custom deployment needed, but requires Model Garden access.
 
-Auth: Google Application Default Credentials (ADC) with the
-cloud-platform scope.
+The request body and response format are OpenAI-compatible in both cases.
+
+Auth: Google Application Default Credentials (ADC) with the cloud-platform scope.
 
 Environment variables (all optional; defaults below):
-  GCP_PROJECT   — GCP project ID (falls back to ADC-inferred project)
-  VERTEX_REGION — deployment region (default: us-south1)
+  GCP_PROJECT          — GCP project ID (falls back to ADC-inferred project)
+  VERTEX_REGION        — deployment region (default: us-south1)
+  VERTEX_ENDPOINT_ID   — numeric endpoint ID for a custom deployment; when set,
+                         the custom endpoint path is used instead of the publisher path
 """
 from __future__ import annotations
 
@@ -41,6 +47,7 @@ MODEL_VERSION = "mistralai/mistral-large-3-instruct-2512"
 # Overridable by tests
 _PROJECT_OVERRIDE: str = ""
 _REGION_OVERRIDE: str = ""
+_ENDPOINT_OVERRIDE: str = ""
 
 
 def _project() -> str:
@@ -60,9 +67,22 @@ def _region() -> str:
     return _REGION_OVERRIDE or os.getenv("VERTEX_REGION", "us-south1")
 
 
+def _endpoint_id() -> str:
+    return _ENDPOINT_OVERRIDE or os.getenv("VERTEX_ENDPOINT_ID", "")
+
+
 def _base_url() -> str:
     region = _region()
     project = _project()
+    endpoint = _endpoint_id()
+    if endpoint:
+        # Custom deployment: dedicated GPU endpoint
+        return (
+            f"https://{region}-aiplatform.googleapis.com/v1"
+            f"/projects/{project}/locations/{region}"
+            f"/endpoints/{endpoint}"
+        )
+    # Managed publisher model (Model Garden access required)
     return (
         f"https://{region}-aiplatform.googleapis.com/v1"
         f"/projects/{project}/locations/{region}"
