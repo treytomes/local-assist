@@ -59,6 +59,9 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - **Voice input** — mic button in the chat composer: one click to record via MediaRecorder, transcript appended to the textarea on completion
 - **Speak aloud** — speaker icon on each assistant bubble: LLM rewrites the markdown response into natural spoken prose, then synthesizes via TTS; clicking again stops playback
 
+### SVG Preview
+SVG code blocks in assistant messages render as a collapsible inline preview above the syntax-highlighted code. Works with both ` ```svg ` and ` ```xml ` fences. The preview is sandboxed (`data:image/svg+xml` — no script execution).
+
 ### Sound Lab
 A dedicated tab for speech testing and procedural sound:
 - **Text-to-Speech** — textarea input, voice picker, speed slider (range adapts to active provider); synthesize + auto-play; provider badge shows `Kokoro` or `Azure`

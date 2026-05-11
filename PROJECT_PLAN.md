@@ -295,6 +295,12 @@ Tavily Search API — free tier (1k calls/month) for development.
   - STT panel: mic recording → transcript display
   - Sound Library: preset browser with descriptions + wave type tag + click-to-preview; collapsible parameter editor per preset (bfxr-style sliders for all params, wave type grid buttons); dirty indicator + reset button; edits immediately retrigger playback
 
+#### SVG rendering
+- [x] SVG code blocks (` ```svg ` or ` ```xml ` fences whose content starts with `<svg`) render an inline collapsible preview above the syntax-highlighted code
+- [x] Preview extracted by recursively walking the hast tree after `rehype-highlight` (text is fragmented into nested highlight spans; shallow `.value` read was insufficient)
+- [x] Rendered as `<img src="data:image/svg+xml;...">` — sandboxed, no script execution
+- [x] CSP `img-src 'self' blob: data:` added to allow inline `data:` image URIs
+
 ### M9 — Vision
 **Goal:** Send images, get analysis back.
 

@@ -13,6 +13,37 @@ import type { BfxrParams } from '../bfxr'
 
 const { Text } = Typography
 
+function SvgPreview({ code }: { code: string }): React.ReactElement {
+  const [expanded, setExpanded] = useState(true)
+  const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(code)}`
+  return (
+    <div style={{ marginBottom: 6, border: '1px solid var(--vscode-border)', borderRadius: 6, overflow: 'hidden' }}>
+      <div
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 10px', cursor: 'pointer',
+          background: 'var(--vscode-surface)',
+          borderBottom: expanded ? '1px solid var(--vscode-border)' : 'none',
+          userSelect: 'none',
+        }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--vscode-text-muted)' }}>{expanded ? '▾' : '▸'}</span>
+        <Text style={{ fontSize: 11, color: 'var(--vscode-text-muted)' }}>SVG Preview</Text>
+      </div>
+      {expanded && (
+        <div style={{ padding: 12, background: '#fff', display: 'flex', justifyContent: 'center' }}>
+          <img
+            src={dataUrl}
+            alt="SVG preview"
+            style={{ maxWidth: '100%', maxHeight: 400 }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SoundReplayButton({ name, params }: { name: string; params: Partial<BfxrParams> }): React.ReactElement {
   const [playing, setPlaying] = useState(false)
   const stopRef = React.useRef<(() => void) | null>(null)
@@ -373,7 +404,28 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, onSpeak
                 >
                   {children}
                 </a>
-              )
+              ),
+              pre: ({ node, children, ...rest }) => {
+                // After rehype-highlight the code text is fragmented into nested
+                // highlight spans — walk all text nodes recursively to reconstruct it.
+                type HastNode = { type: string; value?: string; children?: HastNode[] }
+                function extractText(n: HastNode): string {
+                  if (n.type === 'text') return n.value ?? ''
+                  return (n.children ?? []).map(extractText).join('')
+                }
+                const codeNode = node?.children?.[0] as HastNode | undefined
+                const classes = (codeNode as { properties?: { className?: string[] } } | undefined)
+                  ?.properties?.className ?? []
+                const lang = classes.find((c) => c.startsWith('language-'))?.replace('language-', '') ?? ''
+                const rawText = codeNode ? extractText(codeNode) : ''
+                const isSvg = (lang === 'svg' || lang === 'xml') && rawText.trimStart().startsWith('<svg')
+                return (
+                  <>
+                    {isSvg && <SvgPreview code={rawText} />}
+                    <pre {...rest}>{children}</pre>
+                  </>
+                )
+              },
             }}
           >
             {msg.content}
