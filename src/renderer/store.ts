@@ -68,6 +68,16 @@ interface AppState {
   // Cost alert threshold (USD); null = disabled
   costAlertThreshold: number | null
   setCostAlertThreshold: (v: number | null) => void
+
+  // TTS voice settings
+  ttsVoice: string
+  ttsSpeed: number
+  setTtsVoice: (v: string) => void
+  setTtsSpeed: (v: number) => void
+
+  // Active speech provider — backend DB is source of truth; this is the in-session cache
+  speechProvider: 'azure' | 'local'
+  setSpeechProvider: (p: 'azure' | 'local') => void
 }
 
 const defaultModelParams: ModelParamsMap = {
@@ -177,17 +187,27 @@ Forgetting:
       setSettingsOpen: (v) => set({ settingsOpen: v }),
 
       costAlertThreshold: null,
-      setCostAlertThreshold: (v) => set({ costAlertThreshold: v })
+      setCostAlertThreshold: (v) => set({ costAlertThreshold: v }),
+
+      ttsVoice: 'alloy',
+      ttsSpeed: 1.0,
+      setTtsVoice: (v) => set({ ttsVoice: v }),
+      setTtsSpeed: (v) => set({ ttsSpeed: v }),
+
+      speechProvider: 'azure',
+      setSpeechProvider: (p) => set({ speechProvider: p }),
     }),
     {
       name: 'local-assist-settings',
-      version: 2,
+      version: 3,
       partialize: (s) => ({
         systemPrompt: s.systemPrompt,
         modelParams: s.modelParams,
         selectedModel: s.selectedModel,
         activeConvId: s.activeConvId,
-        costAlertThreshold: s.costAlertThreshold
+        costAlertThreshold: s.costAlertThreshold,
+        ttsVoice: s.ttsVoice,
+        ttsSpeed: s.ttsSpeed,
       })
     }
   )

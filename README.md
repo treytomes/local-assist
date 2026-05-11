@@ -48,6 +48,12 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - Reconstructed text panel with round-trip match indicator
 - Full token details table
 
+### Sound Lab
+A dedicated tab for testing and exploring speech I/O:
+- **Text-to-Speech** — textarea input, voice picker (alloy/echo/fable/onyx/nova/shimmer), speed slider (0.25×–4×); synthesize via Azure `gpt-4o-mini-tts`; native audio player with auto-play
+- **Speech-to-Text** — one-click mic recording via MediaRecorder; transcribed via Azure `gpt-4o-transcribe`; transcript displayed with copy/clear
+- Sound Library placeholder (procedural sound engine coming in M8)
+
 ### Settings
 - Inference parameters: temperature, max tokens, context window depth
 - Global system prompt (defaults to the Mara persona)
@@ -202,6 +208,6 @@ src/
 
 ## Roadmap
 
-- **M8** — Speech I/O + Procedural Sound: STT via `gpt-4o-transcribe`, TTS via `gpt-4o-mini-tts`; bfxr-inspired procedural sound engine with `play_sound` / `search_sounds` tools and a Sound Lab tab
+- **M8** — Speech I/O + Procedural Sound (in progress): Azure TTS/STT working in Sound Lab tab; voice input in chat composer (mic → STT → fills textarea); auto-speak assistant replies; local TTS/STT server toggle; bfxr procedural sound engine with `play_sound` / `search_sounds` tools
 - **M9** — Vision: image attach and screenshot capture
 - **M10** — Polish + packaging: system tray, global hotkey, AppImage / NSIS + auto-update

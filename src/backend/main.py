@@ -10,7 +10,7 @@ from typing import Any, Literal
 log = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -84,6 +84,16 @@ async def lifespan(app: FastAPI):
     seed_pricing(raw)
     _conn = _LockedConn(raw, _db_lock)
     set_shared_connection(_conn)
+
+    # Seed sound presets (no-op if already present)
+    from .tools.sound_tool import seed_sounds as _seed_sounds
+    await _seed_sounds(_conn)
+
+    # Restore persisted Whisper model size (no-op if not set yet)
+    from .providers import local_speech as _ls
+    _stored_whisper = _db_get_setting(_conn, "whisper_model")
+    if _stored_whisper and _stored_whisper in _ls.WHISPER_MODELS:
+        _ls.set_stt_model_size(_stored_whisper)
 
     # Event watcher infrastructure
     def _watcher_interval(source_type: str, default: int) -> int:
@@ -363,6 +373,26 @@ TOOLS: list[dict] = [
             },
         },
     },
+    # --- Sound ---
+    {"type": "function", "function": {
+        "name": "play_sound",
+        "description": (
+            "Play a procedural sound effect in the UI. Provide a preset 'name' to play a named sound, "
+            "or provide a 'params' object with raw bfxr parameters for a custom sound. "
+            "Use search_sounds first if you're not sure which preset to use."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Preset sound name (e.g. 'coin', 'laser', 'powerup', 'blip', 'explosion', 'dial-up', 'startup')."},
+            "params": {"type": "object", "description": "Raw bfxr parameter object for a custom sound. Use instead of 'name' for fully custom sounds."},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "search_sounds",
+        "description": "Semantic search over the sound library by description. Returns matching preset names and parameters.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Natural-language description of the sound you're looking for (e.g. 'something triumphant', 'short click', 'sci-fi effect')."},
+        }, "required": ["query"]},
+    }},
     # --- Google Calendar ---
     {"type": "function", "function": {
         "name": "list_calendars",
@@ -711,6 +741,12 @@ async def execute_tool(name: str, arguments: dict) -> str:
         ))
     if name == "get_drive_file":
         return json.dumps(_get_drive_file(conn(), file_id=arguments.get("file_id", "")))
+    if name == "play_sound":
+        from .tools.sound_tool import execute_play_sound as _play_sound
+        return json.dumps(await _play_sound(conn(), arguments))
+    if name == "search_sounds":
+        from .tools.sound_tool import execute_search_sounds as _search_sounds
+        return json.dumps(await _search_sounds(conn(), arguments))
     return json.dumps({"error": f"Unknown tool: {name}"})
 
 
@@ -978,6 +1014,13 @@ async def chat_completions(body: ChatRequest):
                     tool_entry["reaction"] = parsed.get("reaction")
                 except Exception:
                     pass
+            elif fn["name"] == "play_sound":
+                try:
+                    parsed = _json.loads(result)
+                    if parsed.get("action") == "play_sound":
+                        tool_entry["sound"] = {"name": parsed.get("name"), "params": parsed.get("params")}
+                except Exception:
+                    pass
             tools_used.append(tool_entry)
             messages_for_model.append({
                 "role": "tool",
@@ -1136,6 +1179,166 @@ def usage_summary(days: int = 30):
 @app.get("/v1/usage/{conv_id}")
 def conversation_usage(conv_id: str):
     return get_conversation_cost(conn(), conv_id)
+
+
+# --- Speech (TTS / STT) ---
+
+from .providers import speech as _azure_speech
+from .providers import local_speech as _local_speech
+from .database import get_setting as _get_setting, set_setting as _set_setting
+from fastapi.responses import Response as _Response
+
+_SPEECH_PROVIDER_KEY = "speech_provider"
+_DEFAULT_SPEECH_PROVIDER = "azure"
+
+
+def _speech_provider() -> str:
+    v = _get_setting(conn(), _SPEECH_PROVIDER_KEY)
+    return v if v in ("azure", "local") else _DEFAULT_SPEECH_PROVIDER
+
+
+async def _synthesize(text: str, voice: str, speed: float) -> bytes:
+    if _speech_provider() == "local":
+        return await _local_speech.synthesize(text, voice=voice, speed=speed)
+    return await _azure_speech.synthesize(text, voice=voice, speed=speed)
+
+
+async def _transcribe(audio_bytes: bytes, filename: str) -> str:
+    if _speech_provider() == "local":
+        return await _local_speech.transcribe(audio_bytes, filename=filename)
+    return await _azure_speech.transcribe(audio_bytes, filename=filename)
+
+
+@app.get("/v1/audio/provider")
+def get_speech_provider():
+    """Return the active speech provider and available voices."""
+    provider = _speech_provider()
+    voices = list(_local_speech.VOICES if provider == "local" else _azure_speech.VOICES)
+    return {"provider": provider, "voices": voices}
+
+
+@app.put("/v1/audio/provider")
+def set_speech_provider(body: dict):
+    """Set the active speech provider ('azure' or 'local')."""
+    provider = body.get("provider", "azure")
+    if provider not in ("azure", "local"):
+        raise HTTPException(400, "provider must be 'azure' or 'local'")
+    _set_setting(conn(), _SPEECH_PROVIDER_KEY, provider)
+    voices = list(_local_speech.VOICES if provider == "local" else _azure_speech.VOICES)
+    return {"provider": provider, "voices": voices}
+
+
+_WHISPER_MODEL_KEY = "whisper_model"
+
+
+@app.get("/v1/audio/stt-model")
+def get_stt_model():
+    """Return the current and available Whisper model sizes."""
+    stored = _get_setting(conn(), _WHISPER_MODEL_KEY)
+    current = stored or _local_speech.WHISPER_MODEL_SIZE
+    return {
+        "model": current,
+        "models": list(_local_speech.WHISPER_MODELS),
+        "loaded": _local_speech.is_stt_loaded(),
+    }
+
+
+@app.put("/v1/audio/stt-model")
+async def set_stt_model(body: dict):
+    """Change the Whisper model size. Unloads the current model; the new one loads on next transcription."""
+    size = body.get("model", "")
+    if size not in _local_speech.WHISPER_MODELS:
+        raise HTTPException(400, f"model must be one of {list(_local_speech.WHISPER_MODELS)}")
+    _set_setting(conn(), _WHISPER_MODEL_KEY, size)
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _local_speech.set_stt_model_size, size)
+    return {"model": size, "loaded": _local_speech.is_stt_loaded()}
+
+
+@app.post("/v1/audio/stt-model/load")
+async def load_stt_model():
+    """Force-load the configured Whisper model now (triggers download if needed)."""
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _local_speech._get_stt)
+        return {"model": _local_speech.WHISPER_MODEL_SIZE, "loaded": True}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+class TtsRequest(BaseModel):
+    text: str
+    voice: str = "alloy"
+    speed: float = 1.0
+
+
+@app.post("/v1/audio/speech")
+async def audio_speech(body: TtsRequest):
+    """Synthesize text to MP3 audio via the active TTS provider."""
+    try:
+        mp3 = await _synthesize(body.text, voice=body.voice, speed=body.speed)
+        return _Response(content=mp3, media_type="audio/mpeg")
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(file: UploadFile):
+    """Transcribe audio to text via the active STT provider."""
+    try:
+        audio_bytes = await file.read()
+        text = await _transcribe(audio_bytes, filename=file.filename or "audio.webm")
+        return {"text": text}
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
+
+
+@app.get("/v1/audio/voices")
+def audio_voices():
+    """List available TTS voices for the active provider."""
+    provider = _speech_provider()
+    voices = list(_local_speech.VOICES if provider == "local" else _azure_speech.VOICES)
+    return {"voices": voices}
+
+
+class SpeakRequest(BaseModel):
+    content: str
+    voice: str = "alloy"
+    speed: float = 1.0
+
+
+@app.post("/v1/audio/speak")
+async def audio_speak(body: SpeakRequest):
+    """Rewrite markdown content for speech via LLM, then synthesize to MP3."""
+    rewrite_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a speech optimizer. Convert the user's message into clean, natural spoken prose "
+                "suitable for text-to-speech. Rules: remove all markdown syntax (**, *, #, `, _, ~, >, ---); "
+                "replace bullet lists and numbered lists with natural flowing sentences; replace code blocks "
+                "with a brief spoken description of what the code does (e.g. 'followed by a Python function that ...'); "
+                "keep emojis only if they add meaning when spoken — otherwise remove them; "
+                "preserve all factual content; do not add new information. "
+                "Output only the spoken text, nothing else."
+            ),
+        },
+        {"role": "user", "content": body.content},
+    ]
+    try:
+        _, _, stream_iter = await provider_router.stream_chat(
+            "mistral-large-3", rewrite_messages, max_tokens=2048, temperature=0.3
+        )
+        spoken_text = ""
+        async for chunk in stream_iter:
+            spoken_text += chunk.get("content", "")
+        spoken_text = spoken_text.strip()
+        if not spoken_text:
+            raise ValueError("LLM returned empty rewrite")
+        mp3 = await _synthesize(spoken_text, voice=body.voice, speed=body.speed)
+        return _Response(content=mp3, media_type="audio/mpeg")
+    except Exception as exc:
+        raise HTTPException(502, str(exc))
 
 
 # --- Pricing ---

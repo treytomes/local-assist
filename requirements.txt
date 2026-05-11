@@ -16,3 +16,6 @@ psutil>=5.9.0
 mistral-common>=1.11.0
 sentencepiece>=0.2.0
 huggingface_hub>=1.0.0
+kokoro>=0.9.4
+faster-whisper>=1.2.1
+soundfile>=0.12.1

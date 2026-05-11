@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Input, InputNumber, Modal, Slider, Tabs, Typography } from 'antd'
+import { Button, Input, InputNumber, Modal, Select, Slider, Tabs, Typography } from 'antd'
 import { CheckCircleOutlined, DisconnectOutlined, GoogleOutlined } from '@ant-design/icons'
 import { useAppStore } from '../store'
 import type { ModelParams } from '../store'
@@ -196,6 +196,41 @@ function GoogleAccountTab({ backendUrl }: { backendUrl: string }): React.ReactEl
   )
 }
 
+const TTS_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
+
+function VoiceTab(): React.ReactElement {
+  const { ttsVoice, ttsSpeed, setTtsVoice, setTtsSpeed } = useAppStore()
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12 }}>
+        Voice settings apply when using the Speak button on assistant messages and the mic button in the composer.
+      </Text>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Voice</Text>
+        <Select
+          value={ttsVoice}
+          onChange={setTtsVoice}
+          options={TTS_VOICES.map((v) => ({ label: v, value: v }))}
+          style={{ width: 180 }}
+        />
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Text style={{ color: 'var(--vscode-text)', fontSize: 13 }}>Speed</Text>
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, fontFamily: 'monospace' }}>{ttsSpeed.toFixed(2)}×</Text>
+        </div>
+        <Slider
+          min={0.25} max={4.0} step={0.05}
+          value={ttsSpeed}
+          onChange={setTtsSpeed}
+          styles={{ track: { background: 'var(--vscode-accent)' } }}
+        />
+        <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11 }}>Range: 0.25× – 4.0×</Text>
+      </div>
+    </div>
+  )
+}
+
 export default function SettingsModal(): React.ReactElement {
   const {
     backendUrl,
@@ -279,6 +314,11 @@ export default function SettingsModal(): React.ReactElement {
                 />
               </div>
             )
+          },
+          {
+            key: 'voice',
+            label: 'Voice',
+            children: <VoiceTab />
           },
           {
             key: 'google',

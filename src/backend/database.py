@@ -128,6 +128,19 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE IF NOT EXISTS sounds (
+    name        TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    params      TEXT NOT NULL,
+    is_builtin  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS sound_embeddings USING vec0(
+    name        TEXT,
+    embedding   float[1536]
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_conversation    ON usage(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_timestamp       ON usage(timestamp);

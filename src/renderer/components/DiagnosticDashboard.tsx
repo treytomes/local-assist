@@ -463,7 +463,9 @@ export default function DiagnosticDashboard(): React.ReactElement {
     setHealth,
     setHealthLoading,
     setHealthLastChecked,
-    setBackendUrl
+    setBackendUrl,
+    speechProvider,
+    setSpeechProvider,
   } = useAppStore()
 
   const [activeTab, setActiveTab] = useState<'status' | 'cost' | 'watchers'>('status')
@@ -481,6 +483,69 @@ export default function DiagnosticDashboard(): React.ReactElement {
   const [searchBaseline, setSearchBaseline] = useState<number>(0)
   const [editingBaseline, setEditingBaseline] = useState(false)
 
+  const [speechProviderLoading, setSpeechProviderLoading] = useState(false)
+
+  const [whisperModel, setWhisperModel] = useState<string>('base.en')
+  const [whisperModels, setWhisperModels] = useState<string[]>([])
+  const [whisperLoaded, setWhisperLoaded] = useState(false)
+  const [whisperLoading, setWhisperLoading] = useState(false)
+
+  const fetchSpeechProvider = useCallback(async () => {
+    try {
+      const [provRes, modelRes] = await Promise.all([
+        fetch(`${backendUrl}/v1/audio/provider`),
+        fetch(`${backendUrl}/v1/audio/stt-model`),
+      ])
+      const prov = await provRes.json()
+      const model = await modelRes.json()
+      setSpeechProvider(prov.provider === 'local' ? 'local' : 'azure')
+      setWhisperModel(model.model ?? 'base.en')
+      setWhisperModels(model.models ?? [])
+      setWhisperLoaded(model.loaded ?? false)
+    } catch {
+      // non-fatal
+    }
+  }, [backendUrl, setSpeechProvider])
+
+  async function toggleSpeechProvider(): Promise<void> {
+    const next = speechProvider === 'azure' ? 'local' : 'azure'
+    setSpeechProviderLoading(true)
+    try {
+      await fetch(`${backendUrl}/v1/audio/provider`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: next }),
+      })
+      setSpeechProvider(next)
+    } catch {
+      // non-fatal
+    } finally {
+      setSpeechProviderLoading(false)
+    }
+  }
+
+  async function changeWhisperModel(size: string): Promise<void> {
+    setWhisperModel(size)
+    setWhisperLoaded(false)
+    await fetch(`${backendUrl}/v1/audio/stt-model`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: size }),
+    }).catch(() => {})
+  }
+
+  async function loadWhisperModel(): Promise<void> {
+    setWhisperLoading(true)
+    try {
+      const res = await fetch(`${backendUrl}/v1/audio/stt-model/load`, { method: 'POST' })
+      if (res.ok) setWhisperLoaded(true)
+    } catch {
+      // non-fatal
+    } finally {
+      setWhisperLoading(false)
+    }
+  }
+
   const [selectedPresetIdx, setSelectedPresetIdx] = useState(0)
   const [method, setMethod] = useState<HttpMethod>('GET')
   const [path, setPath] = useState('/v1/health')
@@ -497,7 +562,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
       setHealth(data)
       setHealthLastChecked(new Date())
     } catch {
-      setHealth({ azure: false, ollama: false, active_provider: 'none' })
+      setHealth({ azure: false, ollama: false, local_tts: false, local_stt: false, active_provider: 'none' })
       setHealthLastChecked(new Date())
     } finally {
       setHealthLoading(false)
@@ -516,6 +581,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
   useEffect(() => {
     fetchHealth()
     fetchSearchUsage()
+    fetchSpeechProvider()
     const id = setInterval(() => {
       if (autoRefreshRef.current) {
         fetchHealth()
@@ -523,7 +589,7 @@ export default function DiagnosticDashboard(): React.ReactElement {
       }
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchHealth, fetchSearchUsage])
+  }, [fetchHealth, fetchSearchUsage, fetchSpeechProvider])
 
   function extractVarNames(p: string): string[] {
     return [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
@@ -640,6 +706,71 @@ export default function DiagnosticDashboard(): React.ReactElement {
               {healthLoading ? 'Checking…' : 'No data'}
             </Text>
           )}
+
+          <Divider style={{ borderColor: 'var(--vscode-border)', margin: '12px 0 8px' }} />
+          <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 8, display: 'block' }}>
+            Voice (TTS / STT)
+          </Text>
+
+          {/* Provider toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, minWidth: 70 }}>Provider:</Text>
+            <Switch
+              size="small"
+              checked={speechProvider === 'local'}
+              onChange={toggleSpeechProvider}
+              loading={speechProviderLoading}
+              checkedChildren="Local"
+              unCheckedChildren="Azure"
+              style={{ minWidth: 64 }}
+            />
+            {speechProvider === 'local' && !(health?.local_tts) && (
+              <Tooltip title="Kokoro TTS not yet loaded — will load on first synthesis call">
+                <WarningOutlined style={{ color: 'var(--vscode-warning)', fontSize: 13 }} />
+              </Tooltip>
+            )}
+          </div>
+
+          {/* Health badges */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            <ProviderBadge
+              healthy={health?.local_tts ?? false}
+              label="Kokoro TTS"
+              isActive={speechProvider === 'local'}
+            />
+            <ProviderBadge
+              healthy={health?.local_stt ?? false}
+              label="Whisper STT"
+              isActive={speechProvider === 'local'}
+            />
+          </div>
+
+          {/* Whisper model selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <Text style={{ color: 'var(--vscode-text-muted)', fontSize: 12, minWidth: 70 }}>STT model:</Text>
+            <Select
+              size="small"
+              value={whisperModel}
+              onChange={changeWhisperModel}
+              style={{ flex: 1, fontSize: 12 }}
+              options={(whisperModels.length ? whisperModels : ['base.en']).map((m) => ({ label: m, value: m }))}
+              popupMatchSelectWidth={false}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button
+              size="small"
+              loading={whisperLoading}
+              disabled={whisperLoaded}
+              onClick={loadWhisperModel}
+              style={{ fontSize: 11, marginLeft: 78 }}
+            >
+              {whisperLoaded ? 'Loaded' : 'Download / Load'}
+            </Button>
+            {whisperLoaded && (
+              <Tag color="green" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>in memory</Tag>
+            )}
+          </div>
 
           {searchUsage && (() => {
             const adjusted = Math.min(searchUsage.calls_used + searchBaseline, searchUsage.limit)

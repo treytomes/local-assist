@@ -1,6 +1,9 @@
 import React, { useRef, useState } from 'react'
 import { Button, Tooltip } from 'antd'
-import { SendOutlined } from '@ant-design/icons'
+import { AudioOutlined, LoadingOutlined, SendOutlined } from '@ant-design/icons'
+import { useAppStore } from '../store'
+
+type MicState = 'idle' | 'recording' | 'transcribing'
 
 interface Props {
   onSend: (text: string) => void
@@ -13,8 +16,12 @@ export default function MessageComposer({
   disabled,
   streaming
 }: Props): React.ReactElement {
+  const backendUrl = useAppStore((s) => s.backendUrl)
   const [text, setText] = useState('')
+  const [micState, setMicState] = useState<MicState>('idle')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const mediaRef = useRef<MediaRecorder | null>(null)
+  const chunksRef = useRef<Blob[]>([])
 
   function submit(): void {
     const trimmed = text.trim()
@@ -35,11 +42,57 @@ export default function MessageComposer({
 
   function onInput(e: React.ChangeEvent<HTMLTextAreaElement>): void {
     setText(e.target.value)
-    // Auto-grow up to ~6 lines
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 144)}px`
   }
+
+  async function startRecording(): Promise<void> {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream)
+      chunksRef.current = []
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        setMicState('transcribing')
+        try {
+          const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
+          const form = new FormData()
+          form.append('file', blob, 'audio.webm')
+          const res = await fetch(`${backendUrl}/v1/audio/transcriptions`, { method: 'POST', body: form })
+          if (res.ok) {
+            const data = await res.json()
+            const transcript = data.text?.trim() ?? ''
+            if (transcript) {
+              setText((prev) => prev ? `${prev} ${transcript}` : transcript)
+              setTimeout(() => {
+                const el = textareaRef.current
+                if (!el) return
+                el.style.height = 'auto'
+                el.style.height = `${Math.min(el.scrollHeight, 144)}px`
+                el.focus()
+              }, 0)
+            }
+          }
+        } finally {
+          setMicState('idle')
+        }
+      }
+      recorder.start()
+      mediaRef.current = recorder
+      setMicState('recording')
+    } catch {
+      setMicState('idle')
+    }
+  }
+
+  function stopRecording(): void {
+    mediaRef.current?.stop()
+  }
+
+  const micBusy = micState !== 'idle'
+  const micLabel = micState === 'recording' ? 'Stop recording' : micState === 'transcribing' ? 'Transcribing…' : 'Voice input'
 
   return (
     <div
@@ -53,7 +106,6 @@ export default function MessageComposer({
         flexShrink: 0
       }}
     >
-      {/* Input row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
         <textarea
           ref={textareaRef}
@@ -80,13 +132,22 @@ export default function MessageComposer({
             overflowY: 'auto'
           }}
         />
+        <Tooltip title={micLabel}>
+          <Button
+            icon={micState === 'transcribing' ? <LoadingOutlined /> : <AudioOutlined />}
+            onClick={micState === 'recording' ? stopRecording : startRecording}
+            disabled={disabled || streaming || micState === 'transcribing'}
+            danger={micState === 'recording'}
+            style={{ flexShrink: 0 }}
+          />
+        </Tooltip>
         <Tooltip title="Send (Enter)">
           <Button
             type="primary"
             icon={<SendOutlined />}
             onClick={submit}
             loading={streaming}
-            disabled={!text.trim() || disabled}
+            disabled={!text.trim() || disabled || micBusy}
             style={{
               background: 'var(--vscode-accent)',
               borderColor: 'var(--vscode-accent)',

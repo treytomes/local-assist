@@ -1,6 +1,8 @@
 export interface HealthStatus {
   azure: boolean
   ollama: boolean
+  local_tts: boolean
+  local_stt: boolean
   active_provider: 'azure' | 'ollama' | 'none'
 }
 
@@ -91,6 +93,7 @@ export interface Message {
     results?: Array<{ title: string; url: string; content: string; score: number }>
     reaction?: Reaction
     weather?: WeatherData
+    sound?: { name: string; params: Record<string, unknown> }
   }>
 }
 

@@ -11,6 +11,8 @@ import MessageComposer from './MessageComposer'
 import RightPanel from './RightPanel'
 import { useToast } from '../hooks/useToast'
 import type { Conversation, Message, ModelId, Reaction } from '@shared/types'
+import { play as bfxrPlay, DEFAULT_PARAMS as BFXR_DEFAULTS } from '../bfxr'
+import type { BfxrParams } from '../bfxr'
 
 const { Text } = Typography
 
@@ -39,6 +41,16 @@ export default function ChatView(): React.ReactElement {
   const toast = useToast()
   const [streaming, setStreaming] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+
+  // Prime the shared AudioContext on the first user interaction so Mara's play_sound calls work
+  useEffect(() => {
+    function resume() {
+      getSharedAudioContext().resume().catch(() => {})
+      window.removeEventListener('pointerdown', resume)
+    }
+    window.addEventListener('pointerdown', resume, { once: true })
+    return () => window.removeEventListener('pointerdown', resume)
+  }, [])
   const streamingMsgIdRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -218,6 +230,9 @@ export default function ChatView(): React.ReactElement {
                           r,
                         ]
                       })
+                    }
+                    if (t.name === 'play_sound' && t.sound?.params) {
+                      bfxrPlay({ ...BFXR_DEFAULTS, ...(t.sound.params as Partial<BfxrParams>) })
                     }
                   }
                 }
@@ -437,7 +452,7 @@ export default function ChatView(): React.ReactElement {
           />
         </div>
 
-        <ChatThread messages={messages} onRetry={handleRetry} onDeleteMessage={handleDeleteMessage} onReact={handleReaction} retryDisabled={streaming} />
+        <ChatThread messages={messages} backendUrl={backendUrl} onRetry={handleRetry} onDeleteMessage={handleDeleteMessage} onReact={handleReaction} retryDisabled={streaming} />
         <MessageComposer
           onSend={handleSend}
           streaming={streaming}

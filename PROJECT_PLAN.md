@@ -260,19 +260,23 @@ Tavily Search API — free tier (1k calls/month) for development.
 ### M8 — Speech I/O + Procedural Sound
 **Goal:** Voice in, voice out via Azure; Mara can generate and play sounds on demand.
 
-- [ ] STT: stream mic audio → Azure `gpt-4o-transcribe` → text
-- [ ] TTS: assistant reply → Azure `gpt-4o-mini-tts` → audio playback
-- [ ] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings
-- [ ] IPC: `start-listening`, `stop-listening`, `speak`, `stop-speaking`
-- [ ] Push-to-talk mode (hold key) and continuous mode toggle
+- [x] Azure TTS backend: `POST /v1/audio/speech` → MP3 bytes via `gpt-4o-mini-tts`
+- [x] Azure STT backend: `POST /v1/audio/transcriptions` → transcript via `gpt-4o-transcribe`
+- [x] `GET /v1/audio/voices` — list available TTS voices
+- [x] **Sound Lab tab** — TTS panel (textarea, voice picker, speed slider, synthesize + playback); STT panel (mic recording → transcript display); Sound Library placeholder
+- [x] CSP: `media-src 'self' blob:` added to allow `URL.createObjectURL` audio playback
+- [ ] Local TTS/STT servers: toggle in Sound Lab to switch between Azure and a local server (e.g. Kokoro for TTS, Whisper.cpp for STT); configurable endpoint per provider
+- [x] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings → Voice tab; persisted to store; shared by Speak button, Sound Lab, and voice input
+- [x] TTS opt-in speak: speaker icon on each assistant bubble → LLM rewrites markdown for speech → Azure TTS → plays in hidden audio element; clicking again stops; accent colour while playing
+- [x] Voice input in chat composer: mic button → MediaRecorder → STT → appends transcript to composer textarea
 
 #### Procedural sound engine
-- [ ] Port the bfxr algorithm to TypeScript — single-oscillator synth (square / sawtooth / sine / triangle / noise / breaker wave types) with ADSR envelope, frequency start/slide/delta, vibrato, arpeggio, duty cycle, flanger, and lo/hi-pass filters; runs entirely in Web Audio API, no dependencies
-- [ ] Named preset library: `"coin"`, `"laser"`, `"powerup"`, `"blip"`, `"explosion"`, `"dial-up"` (multi-tone chirp sequence), `"startup"`
-- [ ] `play_sound` tool — Mara can call with a preset name **or** a raw bfxr parameter object; tool result triggers playback in the renderer (first tool with a renderer-side effect rather than a data return)
-- [ ] Each preset and custom sound has a text description (e.g. `"retro coin pickup, bright and short"`, `"sci-fi laser shot with downward slide"`); stored alongside the bfxr parameters; searchable via sqlite-vec cosine similarity so Mara can call `search_sounds("something triumphant")` and get semantically relevant results
-- [ ] `search_sounds` tool — semantic search over the sound library by description; returns matching preset names and parameters
-- [ ] **Sound Lab tab** (alongside Tokenizer and Diagnostics) — browse the full preset library with descriptions; click any sound to preview it; edit description and parameters; add custom sounds; delete user-created entries; live parameter sliders with instant preview for the bfxr parameter set
+- [x] bfxr engine in TypeScript (`src/renderer/bfxr.ts`) — single-oscillator synth (square / sawtooth / sine / triangle / noise / breaker), ADSR envelope, frequency slide + delta, vibrato, arpeggio, duty sweep, phaser/flanger, LP/HP filters; renders to Float32Array via Web Audio API; no dependencies
+- [x] Named preset library (`src/renderer/soundPresets.ts`): `coin`, `laser`, `powerup`, `blip`, `explosion`, `dial-up`, `startup`
+- [x] `play_sound` tool — Mara calls with preset name or raw params; result intercepted by renderer at SSE `done` event → `bfxrPlay()` triggered; shown as 🔊 pill in message thread
+- [x] `search_sounds` tool — semantic search via sqlite-vec cosine similarity over `sound_embeddings` table; fallback to LIKE; returns matching preset names and params
+- [x] Sounds seeded at startup (`seed_sounds()`): builtin presets inserted into `sounds` table + `sound_embeddings` virtual table; embeddings fetched from Azure on first run
+- [x] Sound Lab tab: preset library browser with descriptions, wave type tag, click-to-preview via bfxr engine, accent border while playing
 
 ### M9 — Vision
 **Goal:** Send images, get analysis back.
@@ -312,6 +316,7 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   │   ├── ContextInspector.tsx     ✓  debug drawer, live tool list
 │   │   │   ├── MemoryView.tsx           ✓  knowledge graph CRUD
 │   │   │   ├── TokenizerView.tsx        ✓  Tekken tokenizer test UI
+│   │   │   ├── SoundLabView.tsx         ✓  TTS panel + STT panel + sound library placeholder
 │   │   │   ├── CostDashboard.tsx        ✓  spend chart, model table, alert threshold, CSV export
 │   │   │   └── DiagnosticDashboard.tsx  ✓  health panel + API tester + search quota + cost sub-tab
 │   │   ├── styles/index.css       ✓ VS Code dark theme + Tailwind v4
@@ -330,7 +335,8 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   ├── database.py            ✓ schema, migrations, CRUD
 │   │   ├── providers/
 │   │   │   ├── azure.py           ✓ streaming + tool call support
-│   │   │   └── ollama.py          ✓ streaming + tool call support
+│   │   │   ├── ollama.py          ✓ streaming + tool call support
+│   │   │   └── speech.py          ✓ Azure TTS (gpt-4o-mini-tts) + STT (gpt-4o-transcribe)
 │   │   ├── events/                # M7 event-driven notification system
 │   │   │   ├── watcher.py         ✓ WatcherRegistry, Watcher, EventItem; one-shot + interval modes
 │   │   │   ├── response_loop.py   ✓ queue drain → SSE push

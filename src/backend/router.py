@@ -6,7 +6,7 @@ import asyncio
 import time
 from typing import AsyncIterator
 
-from .providers import azure, ollama
+from .providers import azure, ollama, local_speech as _local_speech
 
 OLLAMA_MODELS = {"gemma3:1b"}
 
@@ -85,13 +85,19 @@ async def call_with_tools(
 
 
 async def get_health() -> dict:
-    az = await azure.health_check()
-    ol = await ollama.health_check()
+    az, ol, local_tts, local_stt = await asyncio.gather(
+        azure.health_check(),
+        ollama.health_check(),
+        _local_speech.health_check_tts(),
+        _local_speech.health_check_stt(),
+    )
     global _azure_healthy, _last_check
     _azure_healthy = az
     _last_check = time.monotonic()
     return {
         "azure": az,
         "ollama": ol,
+        "local_tts": local_tts,
+        "local_stt": local_stt,
         "active_provider": "azure" if az else ("ollama" if ol else "none"),
     }

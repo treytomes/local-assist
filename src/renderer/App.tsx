@@ -1,10 +1,11 @@
 import React, { useEffect, useRef } from 'react'
 import { App as AntApp, ConfigProvider, Tabs, notification, theme } from 'antd'
-import { ApiOutlined, DatabaseOutlined, MessageOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { ApiOutlined, DatabaseOutlined, MessageOutlined, ExperimentOutlined, SoundOutlined } from '@ant-design/icons'
 import ChatView from './components/ChatView'
 import DiagnosticDashboard from './components/DiagnosticDashboard'
 import MemoryView from './components/MemoryView'
 import TokenizerView from './components/TokenizerView'
+import SoundLabView from './components/SoundLabView'
 import { useAppStore } from './store'
 import './styles/index.css'
 
@@ -193,6 +194,16 @@ export default function App(): React.ReactElement {
                 </span>
               ),
               children: <TokenizerView />
+            },
+            {
+              key: 'sound-lab',
+              label: (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <SoundOutlined style={{ fontSize: 13 }} />
+                  Sound Lab
+                </span>
+              ),
+              children: <SoundLabView />
             },
             {
               key: 'diagnostics',

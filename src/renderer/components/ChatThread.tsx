@@ -1,14 +1,59 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Button, Tag, Tooltip, Typography } from 'antd'
 import { useToast } from '../hooks/useToast'
-import { CopyOutlined, DeleteOutlined, RedoOutlined, RobotOutlined, SearchOutlined, UserOutlined } from '@ant-design/icons'
+import { CopyOutlined, DeleteOutlined, LoadingOutlined, RedoOutlined, RobotOutlined, SearchOutlined, SoundOutlined, SoundTwoTone, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import 'highlight.js/styles/github-dark.css'
 import type { Message, Reaction, WeatherData, WeatherForecastDay } from '@shared/types'
+import { useAppStore } from '../store'
+import { play as bfxrPlay, DEFAULT_PARAMS as BFXR_DEFAULTS, getSharedAudioContext } from '../bfxr'
+import type { BfxrParams } from '../bfxr'
 
 const { Text } = Typography
+
+function SoundReplayButton({ name, params }: { name: string; params: Partial<BfxrParams> }): React.ReactElement {
+  const [playing, setPlaying] = useState(false)
+  const stopRef = React.useRef<(() => void) | null>(null)
+
+  function handleClick(): void {
+    if (playing) {
+      stopRef.current?.()
+      stopRef.current = null
+      setPlaying(false)
+      return
+    }
+    const merged = { ...BFXR_DEFAULTS, ...params }
+    const stop = bfxrPlay(merged, getSharedAudioContext())
+    stopRef.current = stop
+    setPlaying(true)
+    const ms = (merged.attackTime + merged.sustainTime + merged.decayTime + 0.05) * 1000
+    setTimeout(() => { setPlaying(false); stopRef.current = null }, ms)
+  }
+
+  return (
+    <Tooltip title={playing ? 'Stop' : `Replay: ${name}`}>
+      <button
+        onClick={handleClick}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '2px 8px',
+          background: playing ? 'color-mix(in srgb, var(--vscode-accent) 15%, transparent)' : 'var(--vscode-surface)',
+          border: `1px solid ${playing ? 'var(--vscode-accent)' : 'var(--vscode-border)'}`,
+          borderRadius: 12, cursor: 'pointer', fontSize: 11,
+          color: playing ? 'var(--vscode-accent)' : 'var(--vscode-text-muted)',
+        }}
+      >
+        {playing
+          ? <SoundTwoTone twoToneColor="var(--vscode-accent)" style={{ fontSize: 11 }} />
+          : <SoundOutlined style={{ fontSize: 11 }} />
+        }
+        {name}
+      </button>
+    </Tooltip>
+  )
+}
 
 const EMOJI_PALETTE = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🤔', '👀', '🙌', '🔥', '✅']
 
@@ -205,10 +250,13 @@ interface MessageBubbleProps {
   onRetry?: () => void
   onDelete?: () => void
   onReact?: (emoji: string) => void
+  onSpeak?: () => void
+  speakLoading?: boolean
+  isSpeaking?: boolean
   retryDisabled?: boolean
 }
 
-function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDisabled }: MessageBubbleProps): React.ReactElement {
+function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, onSpeak, speakLoading, isSpeaking, retryDisabled }: MessageBubbleProps): React.ReactElement {
   const isUser = msg.role === 'user'
   const [pickerOpen, setPickerOpen] = useState(false)
   const groups = groupReactions(msg.reactions ?? [])
@@ -290,6 +338,8 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
                   : t.name === 'list_task_lists' ? '✅ Listed task lists'
                   : t.name === 'search_drive' ? '📁 Searched Drive'
                   : t.name === 'get_drive_file' ? '📁 Read file'
+                  : t.name === 'play_sound' ? `🔊 ${t.sound?.name ?? 'custom sound'}`
+                  : t.name === 'search_sounds' ? '🔊 Searched sounds'
                   : t.name}
             </Tag>
           ))}
@@ -391,6 +441,15 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
         ) : null
       )}
 
+      {/* Sound replay widgets */}
+      {!isUser && msg.tools_used?.some((t) => t.name === 'play_sound' && t.sound?.params) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {msg.tools_used.filter((t) => t.name === 'play_sound' && t.sound?.params).map((t, ti) => (
+            <SoundReplayButton key={ti} name={t.sound!.name ?? 'sound'} params={t.sound!.params as Partial<BfxrParams>} />
+          ))}
+        </div>
+      )}
+
       {/* Reaction pills — only shown when there are existing reactions */}
       {groups.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -469,6 +528,22 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
             </Tooltip>
           </div>
         )}
+        {!isUser && onSpeak && !msg.streaming && (
+          <Tooltip title={isSpeaking ? 'Stop' : 'Speak aloud'}>
+            <Button
+              type="text"
+              size="small"
+              icon={speakLoading ? <LoadingOutlined style={{ fontSize: 11 }} /> : <SoundOutlined style={{ fontSize: 11 }} />}
+              onClick={onSpeak}
+              disabled={speakLoading}
+              style={{
+                color: isSpeaking ? 'var(--vscode-accent)' : 'var(--vscode-text-muted)',
+                padding: '0 2px',
+                height: 18,
+              }}
+            />
+          </Tooltip>
+        )}
         {onDelete && !msg.streaming && (
           <Tooltip title="Delete message">
             <Button
@@ -488,18 +563,63 @@ function MessageBubble({ msg, isLastUserMsg, onRetry, onDelete, onReact, retryDi
 
 interface Props {
   messages: Message[]
+  backendUrl: string
   onRetry?: (text: string) => void
   onDeleteMessage?: (msgId: string) => void
   onReact?: (msgId: string, emoji: string) => void
   retryDisabled?: boolean
 }
 
-export default function ChatThread({ messages, onRetry, onDeleteMessage, onReact, retryDisabled }: Props): React.ReactElement {
+export default function ChatThread({ messages, backendUrl, onRetry, onDeleteMessage, onReact, retryDisabled }: Props): React.ReactElement {
+  const ttsVoice = useAppStore((s) => s.ttsVoice)
+  const ttsSpeed = useAppStore((s) => s.ttsSpeed)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+  const audioBlobUrl = useRef<string | null>(null)
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null)
+  const [speakLoadingId, setSpeakLoadingId] = useState<string | null>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  async function handleSpeak(msg: Message): Promise<void> {
+    const el = audioRef.current
+    // If already playing this message, stop it
+    if (speakingMsgId === msg.id) {
+      el?.pause()
+      setSpeakingMsgId(null)
+      return
+    }
+    // Stop any currently playing audio and revoke old blob URL
+    el?.pause()
+    setSpeakingMsgId(null)
+    if (audioBlobUrl.current) {
+      URL.revokeObjectURL(audioBlobUrl.current)
+      audioBlobUrl.current = null
+    }
+    setSpeakLoadingId(msg.id)
+    try {
+      const res = await fetch(`${backendUrl}/v1/audio/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: msg.content, voice: ttsVoice, speed: ttsSpeed }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      audioBlobUrl.current = url
+      if (!el) return
+      el.src = url
+      el.load()
+      await el.play()
+      setSpeakingMsgId(msg.id)
+    } catch (e) {
+      console.error('speak error', e)
+    } finally {
+      setSpeakLoadingId(null)
+    }
+  }
 
   const visible = messages.filter((m) => m.role !== 'system')
   const lastUserIdx = visible.reduce<number>(
@@ -518,6 +638,12 @@ export default function ChatThread({ messages, onRetry, onDeleteMessage, onReact
         minHeight: 0
       }}
     >
+      <audio
+        ref={audioRef}
+        onEnded={() => { setSpeakingMsgId(null); if (audioBlobUrl.current) { URL.revokeObjectURL(audioBlobUrl.current); audioBlobUrl.current = null } }}
+        onPause={() => setSpeakingMsgId(null)}
+        style={{ display: 'none' }}
+      />
       {visible.length === 0 && (
         <div
           style={{
@@ -540,6 +666,9 @@ export default function ChatThread({ messages, onRetry, onDeleteMessage, onReact
           onRetry={onRetry ? () => onRetry(msg.content) : undefined}
           onDelete={onDeleteMessage ? () => onDeleteMessage(msg.id) : undefined}
           onReact={onReact ? (emoji) => onReact(msg.id, emoji) : undefined}
+          onSpeak={msg.role === 'assistant' ? () => handleSpeak(msg) : undefined}
+          speakLoading={speakLoadingId === msg.id}
+          isSpeaking={speakingMsgId === msg.id}
           retryDisabled={retryDisabled}
         />
       ))}

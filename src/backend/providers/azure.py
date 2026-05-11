@@ -94,6 +94,13 @@ async def stream_chat(
     async with httpx.AsyncClient(timeout=120) as client:
         try:
             async with client.stream("POST", url, headers=_headers(), json=payload) as resp:
+                if resp.status_code == 500:
+                    # Azure 500 on Mistral streaming: model returned array content instead of
+                    # string — Azure's streaming gateway can't handle it.  Retry non-streaming.
+                    await resp.aread()  # drain
+                    async for item in _non_streaming_fallback(client, url, payload, max_tokens):
+                        yield item
+                    return
                 if resp.status_code != 200:
                     body = await resp.aread()
                     yield {"type": "error", "message": f"Azure HTTP {resp.status_code}: {body.decode()[:200]}"}
@@ -112,9 +119,12 @@ async def stream_chat(
                     # token and usage in the same chunk; the old `continue` dropped it.
                     for choice in chunk.get("choices", []):
                         delta = choice.get("delta", {})
-                        text = delta.get("content")
-                        if text:
-                            yield {"type": "delta", "content": text}
+                        content = delta.get("content")
+                        # Mistral can return content as an array of parts
+                        if isinstance(content, list):
+                            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+                        if content:
+                            yield {"type": "delta", "content": content}
                     if chunk.get("usage"):
                         u = chunk["usage"]
                         yield {
@@ -124,6 +134,35 @@ async def stream_chat(
                         }
         except httpx.RequestError as exc:
             yield {"type": "error", "message": str(exc)}
+
+
+async def _non_streaming_fallback(
+    client: httpx.AsyncClient, url: str, streaming_payload: dict, max_tokens: int
+) -> AsyncIterator[dict]:
+    """Retry a failed streaming call as non-streaming and yield delta/usage items."""
+    payload = {k: v for k, v in streaming_payload.items() if k not in ("stream", "stream_options")}
+    payload["stream"] = False
+    try:
+        r = await client.post(url, headers=_headers(), json=payload, timeout=120)
+        if r.status_code != 200:
+            yield {"type": "error", "message": f"Azure HTTP {r.status_code} (fallback): {r.text[:200]}"}
+            return
+        data = r.json()
+        msg = data["choices"][0]["message"]
+        content = msg.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        if content:
+            yield {"type": "delta", "content": content}
+        if data.get("usage"):
+            u = data["usage"]
+            yield {
+                "type": "usage",
+                "prompt_tokens": u.get("prompt_tokens", 0),
+                "completion_tokens": u.get("completion_tokens", 0),
+            }
+    except Exception as exc:
+        yield {"type": "error", "message": f"Fallback error: {exc}"}
 
 
 async def call_with_tools(
