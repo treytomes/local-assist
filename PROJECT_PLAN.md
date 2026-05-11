@@ -257,26 +257,43 @@ Tavily Search API — free tier (1k calls/month) for development.
 - [x] **Spend threshold watcher** (`cost_watcher.py`) — polls every 5 min; fires when all-time cost crosses the configured alert threshold (re-fires at each additional multiple); threshold synced from frontend to `settings.cost_alert_threshold` via `PUT /v1/settings/cost-alert` on every change in CostDashboard
 - [x] **Quiet hours** — `GET/PUT /v1/quiet-hours` backed by `settings` table; default 9 PM–7 AM, enabled by default; response loop checks before pushing SSE events and drops silently during the window; configurable from the **Watchers tab** (toggle + time-range pickers above the watcher list)
 
-### M8 — Speech I/O + Procedural Sound
-**Goal:** Voice in, voice out via Azure; Mara can generate and play sounds on demand.
+### M8 — Speech I/O + Procedural Sound ✅
+**Goal:** Voice in, voice out via Azure and local models; Mara can generate and play sounds on demand.
 
+#### Voice I/O
 - [x] Azure TTS backend: `POST /v1/audio/speech` → MP3 bytes via `gpt-4o-mini-tts`
 - [x] Azure STT backend: `POST /v1/audio/transcriptions` → transcript via `gpt-4o-transcribe`
-- [x] `GET /v1/audio/voices` — list available TTS voices
-- [x] **Sound Lab tab** — TTS panel (textarea, voice picker, speed slider, synthesize + playback); STT panel (mic recording → transcript display); Sound Library placeholder
+- [x] `GET /v1/audio/voices` — list available TTS voices (provider-aware)
 - [x] CSP: `media-src 'self' blob:` added to allow `URL.createObjectURL` audio playback
-- [ ] Local TTS/STT servers: toggle in Sound Lab to switch between Azure and a local server (e.g. Kokoro for TTS, Whisper.cpp for STT); configurable endpoint per provider
-- [x] Voice selection (alloy/echo/fable/onyx/nova/shimmer) in Settings → Voice tab; persisted to store; shared by Speak button, Sound Lab, and voice input
-- [x] TTS opt-in speak: speaker icon on each assistant bubble → LLM rewrites markdown for speech → Azure TTS → plays in hidden audio element; clicking again stops; accent colour while playing
-- [x] Voice input in chat composer: mic button → MediaRecorder → STT → appends transcript to composer textarea
+- [x] Voice selection in Settings → Voice tab; persisted to store; shared by Speak button, Sound Lab, and voice input
+- [x] TTS opt-in speak: speaker icon on each assistant bubble → LLM rewrites markdown for speech → TTS → plays in hidden audio element; clicking again stops; accent colour while playing; `POST /v1/audio/speak` endpoint handles LLM rewrite + synthesis in one call
+- [x] Voice input in chat composer: mic button → MediaRecorder → webm blob → STT → appends transcript to textarea; red/danger while recording, spinner while transcribing
+
+#### Local speech (in-process, no separate servers)
+- [x] `src/backend/providers/local_speech.py` — kokoro `KPipeline` (TTS) + faster-whisper `WhisperModel` (STT); both load lazily on first call and are kept as module-level singletons
+- [x] Kokoro voices: af_heart, af_bella, af_nicole, af_sarah, af_sky, am_adam, am_michael, bf_emma, bf_isabella, bm_george, bm_lewis (American + British English; pipeline selected by voice prefix)
+- [x] faster-whisper model sizes: tiny · tiny.en · base · base.en · small · small.en · medium · medium.en · large-v1 · large-v2 · large-v3; `int8` quantisation on CPU
+- [x] Audio pipeline: PCM → MP3 via `lameenc` (WAV fallback); webm STT input decoded via `soundfile` → ffmpeg subprocess fallback → resampled to 16 kHz
+- [x] `GET/PUT /v1/audio/provider` — read/set active provider (`azure` | `local`); persisted to settings table
+- [x] `GET/PUT /v1/audio/stt-model` — read/set Whisper model size; `POST /v1/audio/stt-model/load` — eagerly load (triggers HuggingFace download if needed)
+- [x] Persisted Whisper model size restored from settings DB on backend startup
+- [x] `speechProvider` in Zustand store — shared across all components; DiagnosticDashboard reads from backend on mount and writes to store on toggle; Sound Lab reads from store
+- [x] Diagnostics → Status tab: Voice (TTS/STT) section with provider toggle, Kokoro TTS + Whisper STT health badges, STT model dropdown, Download/Load button + "in memory" tag
+- [x] `/v1/health` extended with `local_tts` and `local_stt` boolean fields
+- [x] Sound Lab TTS panel adapts voice list and speed range (Azure: 0.25–4×; Kokoro: 0.5–2×) reactively when provider changes; shows `Kokoro` or `Azure` tag
 
 #### Procedural sound engine
-- [x] bfxr engine in TypeScript (`src/renderer/bfxr.ts`) — single-oscillator synth (square / sawtooth / sine / triangle / noise / breaker), ADSR envelope, frequency slide + delta, vibrato, arpeggio, duty sweep, phaser/flanger, LP/HP filters; renders to Float32Array via Web Audio API; no dependencies
+- [x] bfxr engine in TypeScript (`src/renderer/bfxr.ts`) — single-oscillator synth (square / sawtooth / sine / triangle / noise / breaker), ADSR envelope, frequency slide + delta, vibrato, arpeggio, duty sweep, phaser/flanger, LP/HP filters; renders to Float32Array via Web Audio API at 44100 Hz; no dependencies
+- [x] Shared `AudioContext` singleton (`getSharedAudioContext()`); `ctx.resume()` called before playback; `pointerdown` primer in ChatView ensures context is unlocked before tool-triggered sounds
 - [x] Named preset library (`src/renderer/soundPresets.ts`): `coin`, `laser`, `powerup`, `blip`, `explosion`, `dial-up`, `startup`
-- [x] `play_sound` tool — Mara calls with preset name or raw params; result intercepted by renderer at SSE `done` event → `bfxrPlay()` triggered; shown as 🔊 pill in message thread
-- [x] `search_sounds` tool — semantic search via sqlite-vec cosine similarity over `sound_embeddings` table; fallback to LIKE; returns matching preset names and params
-- [x] Sounds seeded at startup (`seed_sounds()`): builtin presets inserted into `sounds` table + `sound_embeddings` virtual table; embeddings fetched from Azure on first run
-- [x] Sound Lab tab: preset library browser with descriptions, wave type tag, click-to-preview via bfxr engine, accent border while playing
+- [x] `play_sound` tool — Mara calls with preset name or partial param overrides; partial params merged with `DEFAULT_PARAMS` before playback; SSE `done` event triggers `bfxrPlay()` in renderer; shown as 🔊 pill in message thread
+- [x] `search_sounds` tool — semantic search via sqlite-vec cosine similarity over `sound_embeddings` table; LIKE fallback; returns preset names + params
+- [x] Sounds seeded at startup (`seed_sounds()`): builtin presets into `sounds` + `sound_embeddings` tables; Azure embeddings fetched on first run
+- [x] Sound replay widget below assistant bubbles that used `play_sound` — click to re-play or stop; shows SoundTwoTone while playing
+- [x] **Sound Lab tab** — fully implemented:
+  - TTS panel: textarea, voice picker, speed slider (range adapts to provider), synthesize + playback; provider badge
+  - STT panel: mic recording → transcript display
+  - Sound Library: preset browser with descriptions + wave type tag + click-to-preview; collapsible parameter editor per preset (bfxr-style sliders for all params, wave type grid buttons); dirty indicator + reset button; edits immediately retrigger playback
 
 ### M9 — Vision
 **Goal:** Send images, get analysis back.
@@ -316,11 +333,13 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   │   ├── ContextInspector.tsx     ✓  debug drawer, live tool list
 │   │   │   ├── MemoryView.tsx           ✓  knowledge graph CRUD
 │   │   │   ├── TokenizerView.tsx        ✓  Tekken tokenizer test UI
-│   │   │   ├── SoundLabView.tsx         ✓  TTS panel + STT panel + sound library placeholder
+│   │   │   ├── SoundLabView.tsx         ✓  TTS/STT panels + bfxr preset browser + param editor
 │   │   │   ├── CostDashboard.tsx        ✓  spend chart, model table, alert threshold, CSV export
-│   │   │   └── DiagnosticDashboard.tsx  ✓  health panel + API tester + search quota + cost sub-tab
+│   │   │   └── DiagnosticDashboard.tsx  ✓  health, API tester, search quota, voice servers, cost
 │   │   ├── styles/index.css       ✓ VS Code dark theme + Tailwind v4
 │   │   ├── store.ts               ✓ Zustand 5 store + persist middleware
+│   │   ├── bfxr.ts                ✓ procedural sound engine (PCM synth + Web Audio API)
+│   │   ├── soundPresets.ts        ✓ 7 named bfxr presets
 │   │   ├── electron.d.ts          ✓ window.electronAPI types
 │   │   └── App.tsx                ✓ AntD ConfigProvider + tabbed shell
 │   ├── main/
@@ -334,9 +353,10 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │   ├── cost.py                ✓ usage recording + reporting
 │   │   ├── database.py            ✓ schema, migrations, CRUD
 │   │   ├── providers/
-│   │   │   ├── azure.py           ✓ streaming + tool call support
+│   │   │   ├── azure.py           ✓ streaming + tool call support + 500 fallback
 │   │   │   ├── ollama.py          ✓ streaming + tool call support
-│   │   │   └── speech.py          ✓ Azure TTS (gpt-4o-mini-tts) + STT (gpt-4o-transcribe)
+│   │   │   ├── speech.py          ✓ Azure TTS (gpt-4o-mini-tts) + STT (gpt-4o-transcribe)
+│   │   │   └── local_speech.py    ✓ in-process Kokoro TTS + faster-whisper STT
 │   │   ├── events/                # M7 event-driven notification system
 │   │   │   ├── watcher.py         ✓ WatcherRegistry, Watcher, EventItem; one-shot + interval modes
 │   │   │   ├── response_loop.py   ✓ queue drain → SSE push
@@ -354,7 +374,8 @@ Tavily Search API — free tier (1k calls/month) for development.
 │   │       ├── memory_tool.py     ✓ knowledge graph CRUD + vector search
 │   │       ├── tokenizer_tool.py  ✓ Tekken v3 tokenizer
 │   │       ├── search.py          ✓ Tavily web search + quota tracking
-│   │       └── google.py          ✓ Calendar / Tasks / Drive (M6)
+│   │       ├── google.py          ✓ Calendar / Tasks / Drive (M6)
+│   │       └── sound_tool.py      ✓ play_sound + search_sounds + sqlite-vec embeddings
 │   └── shared/types.ts            ✓ Conversation, Message, ModelId, etc.
 ├── .env
 ├── package.json                   ✓

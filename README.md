@@ -2,6 +2,11 @@
 
 A local-first AI desktop assistant built with Electron, React, and a FastAPI Python sidecar. Powered by **Mistral Large 3** via Azure AI, with automatic fallback to a local Ollama instance when offline.
 
+![Local Assist screenshot](assets/screenshot-01.png)
+
+If you find this project useful, consider supporting it:
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/treytomes)
+
 ---
 
 ## Features
@@ -26,6 +31,8 @@ The backend doubles as an MCP server. Mara can call tools mid-conversation:
 - **list_task_lists / get_tasks / create_task / complete_task / update_task / delete_task** — Google Tasks across all lists (requires OAuth)
 - **search_drive / get_drive_file** — Google Drive read-only search and plain-text file preview (requires OAuth)
 - **set_reminder** — set a one-shot timed reminder; Mara will proactively surface the message in the active conversation at the specified time; persisted across restarts
+- **play_sound** — play a procedural sound by preset name or custom bfxr parameters; a replay widget appears below the message
+- **search_sounds** — semantic search over the sound preset library by description
 
 The available tool list is served dynamically from `GET /v1/tools` — the Context Inspector always reflects the live set without any hardcoded frontend mirror.
 
@@ -48,20 +55,40 @@ A built-in **Tekken v3** tokenizer test tab (the actual Mistral Large 3 tokenize
 - Reconstructed text panel with round-trip match indicator
 - Full token details table
 
+### Voice I/O
+- **Voice input** — mic button in the chat composer: one click to record via MediaRecorder, transcript appended to the textarea on completion
+- **Speak aloud** — speaker icon on each assistant bubble: LLM rewrites the markdown response into natural spoken prose, then synthesizes via TTS; clicking again stops playback
+
 ### Sound Lab
-A dedicated tab for testing and exploring speech I/O:
-- **Text-to-Speech** — textarea input, voice picker (alloy/echo/fable/onyx/nova/shimmer), speed slider (0.25×–4×); synthesize via Azure `gpt-4o-mini-tts`; native audio player with auto-play
-- **Speech-to-Text** — one-click mic recording via MediaRecorder; transcribed via Azure `gpt-4o-transcribe`; transcript displayed with copy/clear
-- Sound Library placeholder (procedural sound engine coming in M8)
+A dedicated tab for speech testing and procedural sound:
+- **Text-to-Speech** — textarea input, voice picker, speed slider (range adapts to active provider); synthesize + auto-play; provider badge shows `Kokoro` or `Azure`
+- **Speech-to-Text** — one-click mic recording → transcript display with copy/clear
+- **Sound Library** — 7 built-in bfxr presets (coin, laser, powerup, blip, explosion, dial-up, startup); click to preview; collapsible parameter editor with sliders for every synth parameter (wave type, ADSR, frequency slide, vibrato, arpeggio, filters, phaser, duty sweep); dirty indicator + reset per preset
+
+### Procedural Sound Engine
+A bfxr-inspired synth engine (`src/renderer/bfxr.ts`) runs entirely in the browser with no dependencies:
+- 6 wave types: square, sawtooth, sine, triangle, noise, breaker
+- Full ADSR envelope, frequency slide + acceleration, vibrato, arpeggio
+- Duty sweep, phaser/flanger, LP/HP filters with cutoff sweep
+- Renders to `Float32Array` at 44100 Hz via Web Audio API
+- Shared `AudioContext` singleton with autoplay policy handling
+
+### Local Speech Models
+Switch between Azure and fully local, in-process speech models from **Diagnostics → Status → Voice (TTS/STT)**:
+- **TTS**: [Kokoro](https://github.com/remsky/Kokoro-FastAPI) — 11 American and British English voices; loads on first synthesis call
+- **STT**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — 11 model sizes from `tiny.en` to `large-v3`; select model and click **Download / Load** to pre-fetch from HuggingFace
+- Both run in the FastAPI sidecar process; no separate servers required
+- Health badges for both local models shown alongside Azure/Ollama in the health panel
 
 ### Settings
 - Inference parameters: temperature, max tokens, context window depth
 - Global system prompt (defaults to the Mara persona)
+- **Voice tab** — TTS voice and speed; persisted to localStorage and shared across Sound Lab, the Speak button, and voice input
 - All settings persisted to localStorage across sessions
 
 ### Developer Tools
 - **Context Inspector** — shows the exact message list sent to the model on the next turn, with context window truncation applied, plus live tool list and connection status
-- **Diagnostic Dashboard** — provider health (Azure + Ollama, 30s auto-refresh), Tavily search quota progress bar with portal baseline offset, full API tester for all backend endpoints
+- **Diagnostic Dashboard** — provider health (Azure + Ollama + local TTS/STT, 30s auto-refresh), Tavily search quota progress bar with portal baseline offset, full API tester for all backend endpoints, voice provider toggle and Whisper model selector
 
 ### Message Reactions
 - React to any message with emoji from a fixed 12-emoji palette (👍 ❤️ 😂 😮 😢 😡 🎉 🤔 👀 🙌 🔥 ✅)
@@ -208,6 +235,5 @@ src/
 
 ## Roadmap
 
-- **M8** — Speech I/O + Procedural Sound (in progress): Azure TTS/STT working in Sound Lab tab; voice input in chat composer (mic → STT → fills textarea); auto-speak assistant replies; local TTS/STT server toggle; bfxr procedural sound engine with `play_sound` / `search_sounds` tools
-- **M9** — Vision: image attach and screenshot capture
-- **M10** — Polish + packaging: system tray, global hotkey, AppImage / NSIS + auto-update
+- **M9** — Vision: image attach, drag-and-drop, screenshot capture via `desktopCapturer`
+- **M10** — Polish + packaging: system tray, global hotkey, Linux AppImage + Windows NSIS, auto-update
